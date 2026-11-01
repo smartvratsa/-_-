@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.uid == 'CNVGNLTvMdeDh9J2LYkofozpmQ42';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Public civic reports collection
+    match /reports/{reportId} {
+      allow read: if true;
+      allow create: if isValidId(reportId) &&
+        incoming().title is string && incoming().title.size() <= 200 &&
+        incoming().description is string && incoming().description.size() <= 2000;
+      allow update: if isValidId(reportId) &&
+        (isAdmin() || incoming().diff(existing()).affectedKeys().hasAny([
+          'status', 'volunteersCount', 'volunteers', 'municipalNotes',
+          'assignedDepartment', 'resolvedImageUrl', 'resolvedAt',
+          'resolvedByVolunteer', 'resolutionVerification', 'historyLog'
+        ]));
+      allow delete: if isAdmin();
+    }
+
+    // Volunteer users collection
+    match /users/{userId} {
+      allow read: if true;
+      allow create, update: if (isOwner(userId) || isAdmin()) && isValidId(userId);
+      allow delete: if (isOwner(userId) || isAdmin()) && isValidId(userId);
+    }
+  }
+}

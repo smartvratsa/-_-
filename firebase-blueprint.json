@@ -1,0 +1,99 @@
+{
+  "entities": {
+    "Report": {
+      "title": "Report",
+      "description": "Сигнал за градски проблем във Враца",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "ticketNumber": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "neighborhood": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "imageUrl": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["нови", "прегледан", "одобрен", "в_изпълнение", "решен"]
+        },
+        "volunteersCount": {
+          "type": "number"
+        },
+        "urgencyScore": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "ticketNumber", "title", "description", "neighborhood", "status"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Профил на доброволец в отряда на Враца",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "neighborhood": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "rank": {
+          "type": "string"
+        },
+        "weeklyPoints": {
+          "type": "number"
+        },
+        "totalPoints": {
+          "type": "number"
+        }
+      },
+      "required": ["uid", "email", "name"]
+    }
+  },
+  "firestore": {
+    "/reports/{reportId}": {
+      "schema": {
+        "$ref": "#/entities/Report"
+      },
+      "description": "Градски сигнали и проблеми за решение"
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/User"
+      },
+      "description": "Потребителски профили и точки на доброволците"
+    }
+  }
+}

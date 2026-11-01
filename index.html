@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="bg">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Умна Враца – Платформа на ПТГ „Н. Й. Вапцаров“</title>
+    <meta name="description" content="Платформа на ПТГ „Н. Й. Вапцаров“ за автоматичен AI анализ на градски сигнали, интерактивна карта, доброволческа регистрация и седмична класация." />
+    <meta property="og:title" content="Умна Враца – Платформа на ПТГ „Н. Й. Вапцаров“" />
+    <meta property="og:description" content="Платформа на ПТГ „Н. Й. Вапцаров“ за автоматичен AI анализ на градски сигнали, интерактивна карта, доброволческа регистрация и седмична класация." />
+    <meta property="og:image" content="./logo.png" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/png" href="./logo.png" />
+    <link rel="apple-touch-icon" href="./logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <script>
+      // Single-Page-App fallback redirect for GitHub Pages without build step
+      (function() {
+        if (
+          window.location.hostname.includes('github.io') &&
+          !window.location.pathname.includes('/docs') &&
+          document.querySelector('script[src*="main.tsx"]')
+        ) {
+          var base = window.location.pathname;
+          if (!base.endsWith('/')) base += '/';
+          window.location.replace(window.location.origin + base + 'docs/' + window.location.search + window.location.hash);
+        }
+      })();
+    </script>
+  </head>
+  <body class="bg-slate-950 text-slate-100">
+    <div id="root">
+      <div style="font-family: system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background-color: #020617; color: #f8fafc; text-align: center; padding: 24px;">
+        <div style="width: 56px; height: 56px; border-radius: 16px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); display: flex; align-items: center; justify-content: center; margin-bottom: 16px; font-size: 24px;">
+          🌱
+        </div>
+        <h1 style="font-size: 20px; font-weight: 800; margin: 0 0 8px 0; letter-spacing: -0.02em;">Умна Враца</h1>
+        <p style="font-size: 13px; color: #94a3b8; margin: 0; max-width: 320px; line-height: 1.5;">
+          Зареждане на доброволческата платформа...
+        </p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
