@@ -507,7 +507,7 @@ app.post('/api/verify-resolution', async (req, res) => {
 // ==========================================
 // Cloud SQL Database API Routes
 // ==========================================
-import { getAllReports, insertReport, updateReportStatus } from './src/db/reports.ts';
+import { getAllReports, insertReport, updateReportStatus, deleteReport } from './src/db/reports.ts';
 import {
   getOrCreateUser,
   getLeaderboardUsers,
@@ -521,7 +521,8 @@ import {
   isEmailAlreadyRegistered,
   linkUserProvider,
   unlinkUserProvider,
-  deleteUserAccount
+  deleteUserAccount,
+  resetAllUsersWeeklyPoints
 } from './src/db/users.ts';
 import { validateEmailExistence } from './src/lib/emailValidator.ts';
 
@@ -628,6 +629,18 @@ app.patch('/api/reports/:id', async (req, res) => {
   }
 });
 
+// Delete report permanently
+app.delete('/api/reports/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await deleteReport(id);
+    res.json({ success: true, deletedId: id });
+  } catch (error: any) {
+    console.error('Failed to delete report:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete report' });
+  }
+});
+
 // Sync user profile with Cloud SQL
 app.post('/api/users/sync', async (req, res) => {
   try {
@@ -698,6 +711,17 @@ app.get('/api/leaderboard', async (_req, res) => {
   } catch (error: any) {
     console.error('Failed to get leaderboard:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch leaderboard' });
+  }
+});
+
+// Reset weekly points for all users (triggered at week rollover or by Admin)
+app.post('/api/leaderboard/reset-weekly', async (_req, res) => {
+  try {
+    const count = await resetAllUsersWeeklyPoints();
+    res.json({ success: true, resetUsersCount: count });
+  } catch (error: any) {
+    console.error('Failed to reset weekly points:', error);
+    res.status(500).json({ error: error.message || 'Failed to reset weekly points' });
   }
 });
 

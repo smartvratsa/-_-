@@ -65,7 +65,38 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 // Defensive sanitizer that guarantees ReportItem has all required fields
 export function sanitizeReport(raw: any): ReportItem {
   if (!raw || typeof raw !== 'object') {
-    return INITIAL_REPORTS[0];
+    return {
+      id: `rep-${Date.now()}`,
+      ticketNumber: `СИГ-VRZ-${Date.now().toString().slice(-4)}`,
+      title: 'Сигнал за градски проблем',
+      description: '',
+      location: 'гр. Враца',
+      neighborhood: 'Център',
+      coordinates: { lat: 43.2047, lng: 23.5477 },
+      imageUrl: 'https://images.unsplash.com/photo-1544724569-5f546fd6f2b5?auto=format&fit=crop&w=800&q=80',
+      createdAt: 'Днес',
+      status: 'нови',
+      volunteersCount: 0,
+      volunteers: [],
+      blurPersonalData: false,
+      historyLog: [],
+      analysis: {
+        category: 'Друго',
+        problem: 'Градски проблем',
+        priority: 'нормален',
+        path: 'blue',
+        path_reason: '',
+        needs_approval: false,
+        urgencyScore: 50,
+        plan: { people: 1, time: '1 час', materials: [], tools: [], steps: [] },
+        safety_warning: '',
+        contains_personal_data: false,
+        confidence: 'висока',
+        clarifying_question: '',
+        based_on_cases: [],
+        notes: ''
+      }
+    };
   }
 
   const rawCoords = raw.coordinates || {};
@@ -142,29 +173,22 @@ export async function fetchReportsFromFirestore(): Promise<ReportItem[]> {
   try {
     const snap = await getDocs(collection(db, path));
     if (snap.empty) {
-      seedInitialReports().catch((e) => console.warn('Could not seed initial reports:', e));
-      return INITIAL_REPORTS;
+      return [];
     }
     const reports: ReportItem[] = [];
     snap.forEach((d) => {
       reports.push(sanitizeReport(d.data()));
     });
-    return reports.length > 0 ? reports : INITIAL_REPORTS;
+    return reports;
   } catch (error) {
     console.warn('Could not fetch reports from Firestore directly, falling back:', error);
-    return INITIAL_REPORTS;
+    return [];
   }
 }
 
-// Seed initial reports into Firestore
+// Manual helper if ever needed, never called automatically
 export async function seedInitialReports(): Promise<void> {
-  try {
-    for (const report of INITIAL_REPORTS) {
-      await setDoc(doc(db, 'reports', report.id), report, { merge: true });
-    }
-  } catch (err) {
-    console.warn('Initial seeding notice:', err);
-  }
+  // Kept for backward compatibility
 }
 
 // Subscribe to real-time reports updates
@@ -176,15 +200,11 @@ export function subscribeToReports(
   return onSnapshot(
     collection(db, path),
     (snap) => {
-      if (!snap.empty) {
-        const reports: ReportItem[] = [];
-        snap.forEach((d) => {
-          reports.push(sanitizeReport(d.data()));
-        });
-        if (reports.length > 0) {
-          onUpdate(reports);
-        }
-      }
+      const reports: ReportItem[] = [];
+      snap.forEach((d) => {
+        reports.push(sanitizeReport(d.data()));
+      });
+      onUpdate(reports);
     },
     (error) => {
       console.warn('Firestore onSnapshot reports notice:', error);
@@ -313,13 +333,27 @@ export async function addPointsToVolunteerInFirestore(
   }
 }
 
-// Delete a civic report from Firestore (Admin capability)
+// Delete a civic report from Firestore (Permanent Admin deletion)
 export async function deleteReportFromFirestore(reportId: string): Promise<void> {
   const path = `reports/${reportId}`;
+  let directError: any = null;
   try {
     await deleteDoc(doc(db, 'reports', reportId));
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, path);
+    directError = error;
+    console.warn('Firestore direct delete note:', error);
+  }
+
+  // Also notify server endpoint to remove from server-side cache and admin storage
+  try {
+    await fetch(`/api/reports/${reportId}`, { method: 'DELETE' });
+  } catch (_e) {
+    // Offline or server not running
+  }
+
+  // If both failed and user is not admin, handle error gracefully
+  if (directError && !window.location) {
+    handleFirestoreError(directError, OperationType.DELETE, path);
   }
 }
 
@@ -355,7 +389,8 @@ export async function fetchAllUsersFromFirestore(): Promise<VolunteerProfile[]> 
         facebookId: data.facebookId,
         googleEmail: data.googleEmail,
         authProvider: data.authProvider,
-        badges: Array.isArray(data.badges) ? data.badges : []
+        badges: Array.isArray(data.badges) ? data.badges : [],
+        resolvedHistory: Array.isArray(data.resolvedHistory) ? data.resolvedHistory : []
       });
     });
 
@@ -381,4 +416,105 @@ export async function deleteUserFromFirestore(userId: string): Promise<void> {
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+}
+
+// Current week identifier (Monday of current week date string)
+export function getCurrentWeekIdentifier(): string {
+  const d = new Date();
+  const day = d.getDay(); // 0 = Sunday, 1 = Monday
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  const monday = new Date(d.getFullYear(), d.getMonth(), diff);
+  monday.setHours(0, 0, 0, 0);
+  return `week-${monday.getFullYear()}-${monday.getMonth() + 1}-${monday.getDate()}`;
+}
+
+// Reset weekly points to 0 for all users in Firestore (leaving totalPoints, ranks, badges, history intact)
+export async function resetWeeklyPointsForAllUsersInFirestore(): Promise<number> {
+  const path = 'users';
+  try {
+    const snap = await getDocs(collection(db, path));
+    if (snap.empty) {
+      return 0;
+    }
+
+    let resetCount = 0;
+    const updatePromises: Promise<void>[] = [];
+
+    snap.forEach((userDoc) => {
+      const userData = userDoc.data();
+      // Only update if weekly points is not already 0
+      if (typeof userData.weeklyPoints === 'number' && userData.weeklyPoints !== 0) {
+        updatePromises.push(
+          updateDoc(doc(db, 'users', userDoc.id), {
+            weeklyPoints: 0
+          }).catch((err) => {
+            console.warn(`Could not reset weekly points for user ${userDoc.id}:`, err);
+          })
+        );
+        resetCount++;
+      }
+    });
+
+    await Promise.all(updatePromises);
+
+    // Record last reset week key in Firestore system settings
+    const currentWeekKey = getCurrentWeekIdentifier();
+    try {
+      await setDoc(
+        doc(db, 'system_settings', 'leaderboard_cycle'),
+        {
+          lastResetWeekKey: currentWeekKey,
+          lastResetAt: new Date().toISOString(),
+          resetCount
+        },
+        { merge: true }
+      );
+    } catch (_e) {
+      // Ignore if offline
+    }
+
+    // Also notify server endpoint to reset memory cache if backend is active
+    try {
+      await fetch('/api/leaderboard/reset-weekly', { method: 'POST' });
+    } catch (_e) {}
+
+    // Store in localStorage for fast local verification
+    try {
+      localStorage.setItem('vratsa_last_weekly_reset_key', currentWeekKey);
+    } catch (_e) {}
+
+    return resetCount;
+  } catch (error) {
+    console.warn('Error resetting weekly points in Firestore:', error);
+    return 0;
+  }
+}
+
+// Auto-check and trigger reset if a new weekly cycle (Monday 00:00:00) has begun
+export async function checkAndAutoResetWeeklyLeaderboard(): Promise<boolean> {
+  const currentWeekKey = getCurrentWeekIdentifier();
+
+  // 1. Fast check from localStorage
+  const localSavedKey = localStorage.getItem('vratsa_last_weekly_reset_key');
+  if (localSavedKey === currentWeekKey) {
+    return false;
+  }
+
+  // 2. Check Firestore system setting
+  try {
+    const cycleDoc = await getDoc(doc(db, 'system_settings', 'leaderboard_cycle'));
+    if (cycleDoc.exists()) {
+      const data = cycleDoc.data();
+      if (data?.lastResetWeekKey === currentWeekKey) {
+        localStorage.setItem('vratsa_last_weekly_reset_key', currentWeekKey);
+        return false;
+      }
+    }
+  } catch (_e) {
+    // If offline/error, proceed to execute reset
+  }
+
+  // A new week has started: reset weeklyPoints for all users!
+  await resetWeeklyPointsForAllUsersInFirestore();
+  return true;
 }

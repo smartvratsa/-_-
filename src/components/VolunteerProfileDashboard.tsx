@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Award,
   Shield,
@@ -137,10 +137,45 @@ export const VolunteerProfileDashboard: React.FC<VolunteerProfileDashboardProps>
       (Array.isArray(r.volunteers) && r.volunteers.includes(volunteer.name))
   );
 
-  // Find reports resolved by this volunteer
-  const resolvedReports = reports.filter(
-    (r) => r.status === 'решен' && (r.resolvedByVolunteer === volunteer.name || r.resolvedByVolunteer === volunteer.id)
-  );
+  // Find reports resolved by this volunteer (merges live reports with permanent account history)
+  const resolvedReports = useMemo(() => {
+    const list: any[] = [];
+    const seen = new Set<string>();
+
+    if (Array.isArray(volunteer.resolvedHistory)) {
+      volunteer.resolvedHistory.forEach((h) => {
+        if (h && h.id && !seen.has(h.id)) {
+          seen.add(h.id);
+          list.push(h);
+        }
+      });
+    }
+
+    reports
+      .filter(
+        (r) =>
+          r.status === 'решен' &&
+          (r.resolvedByVolunteer === volunteer.name || r.resolvedByVolunteer === volunteer.id)
+      )
+      .forEach((r) => {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          list.push({
+            id: r.id,
+            ticketNumber: r.ticketNumber,
+            title: r.title,
+            neighborhood: r.neighborhood,
+            location: r.location,
+            resolvedAt: r.resolvedAt,
+            resolvedImageUrl: r.resolvedImageUrl,
+            pointsAwarded: r.resolutionVerification?.totalPointsAwarded,
+            resolutionVerification: r.resolutionVerification
+          });
+        }
+      });
+
+    return list;
+  }, [reports, volunteer]);
 
   // Next rank calculation
   const currentThresholdIndex = RANK_THRESHOLDS.findIndex((t) => t.rank === volunteer.rank);
@@ -646,7 +681,7 @@ export const VolunteerProfileDashboard: React.FC<VolunteerProfileDashboardProps>
                 <span>Успешно решени от мен сигнали ({resolvedReports.length})</span>
               </h3>
               <div className="space-y-2">
-                {resolvedReports.map((r) => (
+                {resolvedReports.map((r: any) => (
                   <div
                     key={r.id}
                     className="flex items-center justify-between p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-xs"

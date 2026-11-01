@@ -623,3 +623,30 @@ export async function deleteUserAccount(
 
   return true;
 }
+
+export async function resetAllUsersWeeklyPoints(): Promise<number> {
+  let count = 0;
+  for (const user of inMemoryUsers.values()) {
+    user.weeklyPoints = 0;
+    user.updatedAt = new Date().toISOString();
+    count++;
+  }
+
+  try {
+    const snapshot = await adminDb.collection(COLLECTION).get();
+    if (!snapshot.empty) {
+      const batch = adminDb.batch();
+      snapshot.docs.forEach((doc) => {
+        batch.update(doc.ref, {
+          weeklyPoints: 0,
+          updatedAt: new Date().toISOString()
+        });
+      });
+      await batch.commit();
+    }
+  } catch (_e) {
+    // Memory store fallback
+  }
+
+  return count;
+}

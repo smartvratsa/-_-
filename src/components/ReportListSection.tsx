@@ -56,6 +56,7 @@ export const ReportListSection: React.FC<ReportListSectionProps> = ({
   const [sortBy, setSortBy] = useState<'urgency' | 'newest' | 'volunteers'>('urgency');
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
   const [blurStates, setBlurStates] = useState<Record<string, boolean>>({});
+  const [reportPendingDelete, setReportPendingDelete] = useState<string | null>(null);
 
   // Auto-expand and scroll to focused report from map or notification
   useEffect(() => {
@@ -354,19 +355,39 @@ export const ReportListSection: React.FC<ReportListSectionProps> = ({
                       )}
 
                       {isAdmin && onDeleteReport && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (window.confirm(`Админ: Сигурни ли сте, че искате да изтриете сигнал ${report.ticketNumber} "${report.title}"?`)) {
-                              onDeleteReport(report.id);
-                            }
-                          }}
-                          className="bg-red-950/70 hover:bg-red-900 text-red-200 hover:text-white text-xs px-2.5 py-1.5 rounded-lg border border-red-800/40 transition flex items-center gap-1 font-bold cursor-pointer"
-                          title="Администраторско премахване на сигнал"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                          <span>Изтрий</span>
-                        </button>
+                        reportPendingDelete === report.id ? (
+                          <div className="flex items-center gap-1 animate-fadeIn bg-red-950/80 p-1 rounded-lg border border-red-500/60">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onDeleteReport(report.id);
+                                setReportPendingDelete(null);
+                              }}
+                              className="bg-red-600 hover:bg-red-500 text-white text-[11px] px-2 py-1 rounded font-bold transition flex items-center gap-1 shadow cursor-pointer"
+                              title="Потвърди окончателно изтриване"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Изтрий</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setReportPendingDelete(null)}
+                              className="bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] px-1.5 py-1 rounded cursor-pointer"
+                            >
+                              Отказ
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setReportPendingDelete(report.id)}
+                            className="bg-red-950/70 hover:bg-red-900 text-red-200 hover:text-white text-xs px-2.5 py-1.5 rounded-lg border border-red-800/40 transition flex items-center gap-1 font-bold cursor-pointer"
+                            title="Администраторско премахване на сигнал"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                            <span>Изтрий</span>
+                          </button>
+                        )
                       )}
 
                       <button

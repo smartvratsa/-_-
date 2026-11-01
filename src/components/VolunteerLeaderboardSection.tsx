@@ -241,6 +241,10 @@ export const VolunteerLeaderboardSection: React.FC<VolunteerLeaderboardSectionPr
                 <span className="text-[10px] text-slate-400">сек</span>
               </div>
             </div>
+            <div className="mt-2.5 pt-2 border-t border-slate-800 text-[10px] text-slate-400 flex items-center justify-between gap-2">
+              <span>🔄 Седмичните точки се зануляват всеки понеделник</span>
+              <span className="text-emerald-400 font-semibold font-mono">Общите точки се пазят</span>
+            </div>
           </div>
         </div>
 
@@ -338,19 +342,36 @@ export const VolunteerLeaderboardSection: React.FC<VolunteerLeaderboardSectionPr
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/80">
-              {leaderboardList.map((user, idx) => {
-                const rankNum = idx + 1;
-                const isGold = rankNum === 1;
-                const isSilver = rankNum === 2;
-                const isBronze = rankNum === 3;
+              {leaderboardList.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 px-4 text-center">
+                    <div className="max-w-md mx-auto space-y-3">
+                      <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto text-2xl">
+                        🏆
+                      </div>
+                      <div className="text-sm font-bold text-white">
+                        Седмичната класация започва на чисто!
+                      </div>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        Всички акаунти стартират с 0 точки за текущата седмица. Решете първия градски проблем на Враца с верифицирана снимка и оглавете класацията!
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                leaderboardList.map((user, idx) => {
+                  const rankNum = idx + 1;
+                  const isGold = rankNum === 1;
+                  const isSilver = rankNum === 2;
+                  const isBronze = rankNum === 3;
 
-                return (
-                  <tr
-                    key={user.id}
-                    className={`transition-colors hover:bg-slate-800/50 ${
-                      user.isCurrentUser ? 'bg-emerald-950/20 border-l-2 border-emerald-500' : ''
-                    }`}
-                  >
+                  return (
+                    <tr
+                      key={user.id}
+                      className={`transition-colors hover:bg-slate-800/50 ${
+                        user.isCurrentUser ? 'bg-emerald-950/20 border-l-2 border-emerald-500' : ''
+                      }`}
+                    >
                     {/* Rank Badge */}
                     <td className="py-3.5 px-4 text-center">
                       {isGold ? (
@@ -431,8 +452,9 @@ export const VolunteerLeaderboardSection: React.FC<VolunteerLeaderboardSectionPr
                     </td>
                   </tr>
                 );
-              })}
-            </tbody>
+              })
+            )}
+          </tbody>
           </table>
         </div>
       </div>

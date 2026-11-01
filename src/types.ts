@@ -144,6 +144,16 @@ export interface VolunteerProfile {
     description: string;
     earnedDate?: string;
   }[];
+  resolvedHistory?: {
+    id: string;
+    ticketNumber: string;
+    title: string;
+    neighborhood?: string;
+    location?: string;
+    resolvedAt?: string;
+    resolvedImageUrl?: string;
+    pointsAwarded?: number;
+  }[];
 }
 
 export interface LeaderboardUser {

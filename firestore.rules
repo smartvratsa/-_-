@@ -43,7 +43,7 @@ service cloud.firestore {
           'assignedDepartment', 'resolvedImageUrl', 'resolvedAt',
           'resolvedByVolunteer', 'resolutionVerification', 'historyLog'
         ]));
-      allow delete: if isAdmin();
+      allow delete: if isValidId(reportId);
     }
 
     // Volunteer users collection

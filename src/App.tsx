@@ -14,7 +14,8 @@ import {
   saveUserProfileToFirestore,
   addPointsToVolunteerInFirestore,
   deleteReportFromFirestore,
-  sanitizeReport
+  sanitizeReport,
+  checkAndAutoResetWeeklyLeaderboard
 } from './lib/firestoreService';
 import { Header } from './components/Header';
 import { VratsaInteractiveMap } from './components/VratsaInteractiveMap';
@@ -52,20 +53,29 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'map' | 'submit' | 'reports' | 'leaderboard' | 'solved' | 'guide' | 'profile'>('map');
   const [userRole, setUserRole] = useState<'citizen' | 'official'>('citizen');
 
-  // Reports state synced with localStorage
+  // Reports state synced with localStorage (cleans stale placeholders)
   const [reports, setReports] = useState<ReportItem[]>(() => {
     try {
       const saved = localStorage.getItem('vratsa_civic_reports');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map(sanitizeReport);
+          const nonMock = parsed.filter(
+            (r: any) =>
+              r &&
+              r.id &&
+              !r.id.startsWith('rep-') &&
+              !(typeof r.ticketNumber === 'string' && r.ticketNumber.includes('VRZ-2026-0'))
+          );
+          if (nonMock.length > 0) {
+            return nonMock.map(sanitizeReport);
+          }
         }
       }
     } catch (e) {
       console.warn('Could not read saved reports from localStorage:', e);
     }
-    return INITIAL_REPORTS;
+    return [];
   });
 
   // Current volunteer profile synced with localStorage
@@ -101,30 +111,54 @@ export default function App() {
     return monday.getTime();
   };
 
-  // Weekly cleanup: automatically prune resolved problems from past weekly cycles so active count stays clean
+  // Weekly cleanup: automatically delete resolved problems from past weekly cycles from Firestore
+  // to avoid cluttering the active signals count, while preserving volunteer account points,
+  // badges, and resolved history permanently!
   useEffect(() => {
     const mondayTime = getStartOfCurrentWeek();
-    setReports((prev) => {
-      const activeOrThisWeek = prev.filter((r) => {
-        if (r.status !== 'решен') return true;
-        if (r.resolvedAt) {
-          const resDate = new Date(r.resolvedAt).getTime();
-          return !isNaN(resDate) && resDate >= mondayTime;
-        }
-        // If resolved without a date or from older mocks, archive it out of active feed
-        return false;
+    const oldResolved = reports.filter((r) => {
+      if (r.status !== 'решен') return false;
+      if (r.resolvedAt) {
+        const resDate = new Date(r.resolvedAt).getTime();
+        return !isNaN(resDate) && resDate < mondayTime;
+      }
+      return true; // resolved without date
+    });
+
+    if (oldResolved.length > 0) {
+      oldResolved.forEach((r) => {
+        deleteReportFromFirestore(r.id).catch(() => {});
+        fetch(`/api/reports/${r.id}`, { method: 'DELETE' }).catch(() => {});
       });
 
-      if (activeOrThisWeek.length !== prev.length) {
-        return activeOrThisWeek;
-      }
-      return prev;
-    });
+      setReports((prev) => prev.filter((r) => !oldResolved.some((p) => p.id === r.id)));
+    }
+  }, [reports.length]);
+
+  // Weekly leaderboard cycle auto-reset check:
+  // When a new week starts (Monday 00:00:00), reset weekly points to 0 for all users
+  // while preserving all total points, badges, and history!
+  useEffect(() => {
+    checkAndAutoResetWeeklyLeaderboard()
+      .then((wasReset) => {
+        if (wasReset && currentVolunteer && currentVolunteer.weeklyPoints > 0) {
+          setCurrentVolunteer((prev) =>
+            prev ? { ...prev, weeklyPoints: 0 } : null
+          );
+        }
+      })
+      .catch((e) => console.warn('Weekly cycle check notice:', e));
   }, []);
 
   // Admin report deletion handler
   const handleDeleteReport = async (reportId: string) => {
     setReports((prev) => prev.filter((r) => r.id !== reportId));
+    try {
+      localStorage.setItem(
+        'vratsa_civic_reports',
+        JSON.stringify(reports.filter((r) => r.id !== reportId))
+      );
+    } catch (_e) {}
     try {
       await deleteReportFromFirestore(reportId);
     } catch (e) {
@@ -139,17 +173,21 @@ export default function App() {
     // 1. Initial fetch from Firestore
     fetchReportsFromFirestore()
       .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          setReports(data);
+        if (Array.isArray(data)) {
+          const clean = data.filter(
+            (r) => !r.id.startsWith('rep-') && !r.ticketNumber?.includes('VRZ-2026-0')
+          );
+          setReports(clean);
         }
       })
       .catch((err) => console.info('Firestore initial fetch fallback:', err));
 
     // 2. Real-time Firestore onSnapshot listener
     const unsubscribe = subscribeToReports((updatedReports) => {
-      if (Array.isArray(updatedReports) && updatedReports.length > 0) {
-        setReports(updatedReports);
-      }
+      const clean = (updatedReports || []).filter(
+        (r) => !r.id.startsWith('rep-') && !r.ticketNumber?.includes('VRZ-2026-0')
+      );
+      setReports(clean);
     });
 
     // 3. Fallback check to /api/reports if Express server is running
@@ -160,7 +198,12 @@ export default function App() {
       })
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
-          setReports(data);
+          const clean = data.filter(
+            (r) => !r.id.startsWith('rep-') && !r.ticketNumber?.includes('VRZ-2026-0')
+          );
+          if (clean.length > 0) {
+            setReports(clean);
+          }
         }
       })
       .catch(() => {});
@@ -457,14 +500,37 @@ export default function App() {
       else if (newTotal >= 500) newRank = 'Градски майстор';
       else if (newTotal >= 200) newRank = 'Квартален пазител';
 
-      setCurrentVolunteer({
+      const resolutionEntry = {
+        id: updatedReport.id,
+        ticketNumber: updatedReport.ticketNumber,
+        title: updatedReport.title,
+        neighborhood: updatedReport.neighborhood,
+        location: updatedReport.location,
+        resolvedAt: updatedReport.resolvedAt,
+        resolvedImageUrl: updatedReport.resolvedImageUrl,
+        pointsAwarded: pointsAwarded,
+      };
+
+      const updatedHistory = [
+        ...(currentVolunteer.resolvedHistory || []).filter((h) => h.id !== updatedReport.id),
+        resolutionEntry
+      ];
+
+      const updatedVolunteer: VolunteerProfile = {
         ...currentVolunteer,
         weeklyPoints: newWeekly,
         totalPoints: newTotal,
         resolvedTasksCount: newResolvedCount,
         rank: newRank,
-        activeAssignments: currentVolunteer.activeAssignments.filter((id) => id !== updatedReport.id)
-      });
+        activeAssignments: currentVolunteer.activeAssignments.filter((id) => id !== updatedReport.id),
+        resolvedHistory: updatedHistory,
+      };
+
+      setCurrentVolunteer(updatedVolunteer);
+
+      // Direct Firestore user profile sync (permanently saves points, badge progression, and resolved history)
+      saveUserProfileToFirestore(updatedVolunteer)
+        .catch((e) => console.warn('Could not save user profile with resolved history:', e));
 
       // Direct Firestore points sync
       addPointsToVolunteerInFirestore(currentVolunteer.id, pointsAwarded, newRank)
@@ -738,6 +804,12 @@ export default function App() {
                 onLogout={handleLogoutVolunteer}
                 onNavigateToMap={() => setActiveTab('map')}
                 onSwitchToVolunteerDashboard={() => setForceShowVolunteerProfile(true)}
+                onResetWeeklyPoints={() => {
+                  if (currentVolunteer) {
+                    setCurrentVolunteer((prev) => (prev ? { ...prev, weeklyPoints: 0 } : null));
+                  }
+                  showToast('Седмичната класация беше занулена за новата седмица! Всички започват от 0 т.');
+                }}
               />
             ) : (
               <div className="space-y-4">

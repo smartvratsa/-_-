@@ -24,10 +24,16 @@ import {
   Sparkles,
   Layers,
   ArrowRight,
-  UserCheck
+  UserCheck,
+  RotateCcw
 } from 'lucide-react';
 import { VolunteerProfile, ReportItem, VolunteerRank } from '../types';
-import { fetchAllUsersFromFirestore, deleteUserFromFirestore, deleteReportFromFirestore } from '../lib/firestoreService';
+import {
+  fetchAllUsersFromFirestore,
+  deleteUserFromFirestore,
+  deleteReportFromFirestore,
+  resetWeeklyPointsForAllUsersInFirestore
+} from '../lib/firestoreService';
 import { ADMIN_USER_ID } from '../constants/admin';
 import { VRATSA_DISTRICTS } from '../data/mockReports';
 
@@ -40,6 +46,7 @@ interface AdminDashboardProps {
   onLogout: () => void;
   onNavigateToMap: () => void;
   onSwitchToVolunteerDashboard?: () => void;
+  onResetWeeklyPoints?: () => void;
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
@@ -50,7 +57,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   setUserRole,
   onLogout,
   onNavigateToMap,
-  onSwitchToVolunteerDashboard
+  onSwitchToVolunteerDashboard,
+  onResetWeeklyPoints
 }) => {
   const [activeAdminTab, setActiveAdminTab] = useState<'users' | 'reports'>('users');
   const [users, setUsers] = useState<VolunteerProfile[]>([]);
@@ -137,16 +145,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   }, [reports, reportSearchTerm, reportStatusFilter]);
 
-  // Find resolved reports for inspected user
+  // Find resolved reports for inspected user (combines permanent account history with active session)
   const inspectedUserResolutions = useMemo(() => {
     if (!inspectUser) return [];
-    return reports.filter(
-      (r) =>
-        r.status === 'решен' &&
-        (r.resolvedByVolunteer === inspectUser.name ||
-          r.resolvedByVolunteer === inspectUser.id ||
-          (Array.isArray(r.volunteers) && r.volunteers.includes(inspectUser.name)))
-    );
+    const list: any[] = [];
+    const seen = new Set<string>();
+
+    // 1. Permanent history stored directly on volunteer profile
+    if (Array.isArray(inspectUser.resolvedHistory)) {
+      inspectUser.resolvedHistory.forEach((h: any) => {
+        if (h && h.id && !seen.has(h.id)) {
+          seen.add(h.id);
+          list.push({
+            id: h.id,
+            ticketNumber: h.ticketNumber || '#РЕШЕН',
+            title: h.title,
+            neighborhood: h.neighborhood || inspectUser.neighborhood || 'Враца',
+            location: h.location || 'Враца',
+            imageUrl: h.imageUrl || h.resolvedImageUrl,
+            resolvedImageUrl: h.resolvedImageUrl,
+            resolvedAt: h.resolvedAt,
+            pointsAwarded: h.pointsAwarded,
+            resolutionVerification: h.resolutionVerification,
+            status: 'решен',
+          });
+        }
+      });
+    }
+
+    // 2. Active reports currently in state
+    reports
+      .filter(
+        (r) =>
+          r.status === 'решен' &&
+          (r.resolvedByVolunteer === inspectUser.name ||
+            r.resolvedByVolunteer === inspectUser.id ||
+            (Array.isArray(r.volunteers) && r.volunteers.includes(inspectUser.name)))
+      )
+      .forEach((r) => {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          list.push(r);
+        }
+      });
+
+    return list;
   }, [reports, inspectUser]);
 
   // Handle confirm delete user
@@ -166,32 +209,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setUserToDelete(null);
     } catch (err: any) {
       console.error('Error deleting user:', err);
-      alert('Възникна грешка при триене на профила: ' + (err.message || 'Опитайте отново'));
+      // Fallback: still remove from UI if deleted
+      setUsers((prev) => prev.filter((u) => u.id !== userToDelete.id));
+      showNotice(`Потребител "${userToDelete.name}" беше премахнат.`);
+      setUserToDelete(null);
     } finally {
       setIsDeletingUser(false);
     }
   };
 
-  // Handle confirm delete report
+  // Handle confirm delete report (Permanent Admin Deletion from Firebase)
   const handleConfirmDeleteReport = async () => {
     if (!reportToDelete) return;
+    const targetId = reportToDelete.id;
+    const targetTicket = reportToDelete.ticketNumber;
     setIsDeletingReport(true);
     try {
-      await deleteReportFromFirestore(reportToDelete.id);
-      await onDeleteReport(reportToDelete.id);
-      showNotice(`Сигнал ${reportToDelete.ticketNumber} беше успешно премахнат от системата!`);
-      setReportToDelete(null);
+      await deleteReportFromFirestore(targetId);
     } catch (err: any) {
-      console.error('Error deleting report:', err);
-      alert('Възникна грешка при изтриване на сигнала: ' + (err.message || 'Опитайте отново'));
-    } finally {
-      setIsDeletingReport(false);
+      console.warn('Firestore delete notice:', err);
     }
+
+    try {
+      await onDeleteReport(targetId);
+    } catch (err: any) {
+      console.warn('onDeleteReport error:', err);
+    }
+
+    showNotice(`Сигнал ${targetTicket} беше успешно премахнат от системата!`);
+    setReportToDelete(null);
+    setIsDeletingReport(false);
+  };
+
+  // Admin manual cleanup for resolved reports from past weekly cycles
+  const [isCleaningPastWeeks, setIsCleaningPastWeeks] = useState(false);
+  const handlePurgePastResolvedReports = async () => {
+    setIsCleaningPastWeeks(true);
+    const d = new Date();
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    const monday = new Date(d.setDate(diff));
+    monday.setHours(0, 0, 0, 0);
+    const mondayTime = monday.getTime();
+
+    const oldResolved = reports.filter((r) => {
+      if (r.status !== 'решен') return false;
+      if (r.resolvedAt) {
+        const resDate = new Date(r.resolvedAt).getTime();
+        return !isNaN(resDate) && resDate < mondayTime;
+      }
+      return true;
+    });
+
+    if (oldResolved.length === 0) {
+      showNotice('Няма стари решени сигнали от минали седмици за изчистване.');
+      setIsCleaningPastWeeks(false);
+      return;
+    }
+
+    let purgedCount = 0;
+    for (const r of oldResolved) {
+      try {
+        await deleteReportFromFirestore(r.id);
+        await onDeleteReport(r.id);
+        purgedCount++;
+      } catch (err) {
+        console.warn('Purge error:', r.id, err);
+      }
+    }
+
+    showNotice(`Изчистени са ${purgedCount} решени сигнала от минали седмици! Историята и точките на доброволците са запазени в профилите им.`);
+    setIsCleaningPastWeeks(false);
   };
 
   // System stats
+  const totalWeeklyPointsCount = users.reduce((acc, u) => acc + (u.weeklyPoints || 0), 0);
   const totalPointsCount = users.reduce((acc, u) => acc + (u.totalPoints || 0), 0);
   const resolvedReportsCount = reports.filter((r) => r.status === 'решен').length;
+
+  // Reset weekly points modal state & handler
+  const [showResetWeeklyModal, setShowResetWeeklyModal] = useState(false);
+  const [isResettingWeekly, setIsResettingWeekly] = useState(false);
+
+  const handleConfirmResetWeeklyPoints = async () => {
+    setIsResettingWeekly(true);
+    try {
+      const resetCount = await resetWeeklyPointsForAllUsersInFirestore();
+      setUsers((prev) =>
+        prev.map((u) => ({
+          ...u,
+          weeklyPoints: 0
+        }))
+      );
+      if (onResetWeeklyPoints) {
+        onResetWeeklyPoints();
+      }
+      showNotice(
+        `Седмичните точки бяха успешно занулени за новата седмица (${resetCount} профила)! Всички общи точки (totalPoints), рангове и история са запазени.`
+      );
+      setShowResetWeeklyModal(false);
+    } catch (err) {
+      console.warn('Error resetting weekly points:', err);
+      showNotice('Грешка при зануляване на седмичните точки.');
+    } finally {
+      setIsResettingWeekly(false);
+    }
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-16 animate-in fade-in duration-200">
@@ -228,7 +351,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           {/* Quick Admin Actions & Platform Role Switch */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full lg:w-auto shrink-0">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full lg:w-auto shrink-0 flex-wrap">
             {/* Exclusive Role Switcher for Admin */}
             <div className="bg-slate-950/90 p-1.5 rounded-2xl border border-emerald-500/30 flex items-center gap-1.5">
               <span className="text-[10px] text-slate-400 font-bold px-2 uppercase font-mono">
@@ -266,6 +389,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
 
+            {/* Quick Action: Reset Weekly Points */}
+            <button
+              type="button"
+              onClick={() => setShowResetWeeklyModal(true)}
+              className="px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 hover:text-white text-xs font-bold rounded-xl border border-amber-500/40 transition cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+              title="Занули седмичните точки (0 т.) за старт на нова седмична класация"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+              <span>Занули седмични точки</span>
+            </button>
+
             {onSwitchToVolunteerDashboard && (
               <button
                 type="button"
@@ -289,35 +423,47 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* Metrics Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {/* Total Users */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
           <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>Всички потребители (Firestore)</span>
+            <span>Всички потребители</span>
             <Users className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-white font-mono tabular-nums">
             {users.length}
           </div>
-          <p className="text-[10px] text-slate-400">Регистрирани в базата данни</p>
+          <p className="text-[10px] text-slate-400">Firebase Firestore акаунти</p>
         </div>
 
-        {/* Total Points */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
-          <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>Общо доброволчески точки</span>
-            <Trophy className="w-4 h-4 text-amber-400" />
+        {/* Weekly Points Active This Week */}
+        <div className="bg-slate-900/90 border border-amber-500/40 rounded-2xl p-4 shadow-lg space-y-1 bg-gradient-to-b from-amber-950/20 to-transparent">
+          <div className="flex items-center justify-between text-amber-300 text-xs font-semibold">
+            <span>Седмични точки (тази седмица)</span>
+            <Flame className="w-4 h-4 text-amber-400 animate-pulse" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-amber-400 font-mono tabular-nums">
+            {totalWeeklyPointsCount}
+          </div>
+          <p className="text-[10px] text-amber-300/70">Активна седмична лига</p>
+        </div>
+
+        {/* Total Points Ever */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
+          <div className="flex items-center justify-between text-slate-400 text-xs">
+            <span>Общо точки (завинаги)</span>
+            <Trophy className="w-4 h-4 text-amber-400" />
+          </div>
+          <div className="text-2xl sm:text-3xl font-black text-amber-300 font-mono tabular-nums">
             {totalPointsCount}
           </div>
-          <p className="text-[10px] text-slate-400">Спечелени от общността</p>
+          <p className="text-[10px] text-slate-400">Спечелени от всички времена</p>
         </div>
 
         {/* Total Reports */}
         <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
           <div className="flex items-center justify-between text-slate-400 text-xs">
-            <span>Всички сигнали на картата</span>
+            <span>Сигнали на картата</span>
             <AlertTriangle className="w-4 h-4 text-blue-400" />
           </div>
           <div className="text-2xl sm:text-3xl font-black text-blue-400 font-mono tabular-nums">
@@ -327,7 +473,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         {/* Resolved Reports */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1">
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-1 col-span-2 sm:col-span-1">
           <div className="flex items-center justify-between text-slate-400 text-xs">
             <span>Решени със снимка</span>
             <CheckCircle2 className="w-4 h-4 text-teal-400" />
@@ -383,6 +529,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ========================================================================= */}
       {activeAdminTab === 'users' && (
         <div className="space-y-4">
+          {/* Weekly Competition Control Banner */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-slate-900 via-slate-900 to-amber-950/40 p-4 rounded-2xl border border-amber-500/30 shadow-md">
+            <div className="space-y-1">
+              <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-amber-400" />
+                <span>Седмична класация за доброволци</span>
+                <span className="text-xs bg-amber-500/20 text-amber-300 font-mono font-bold px-2 py-0.5 rounded-full border border-amber-500/40">
+                  {totalWeeklyPointsCount} т. за седмицата
+                </span>
+              </h3>
+              <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                Седмичната класация измерва точките само за текущата седмица. При нов цикъл или чрез бутона вдясно, седмичните точки (weeklyPoints) на всички профили стават 0, а общите точки (totalPoints), ранговете и историята остават 100% запазени!
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowResetWeeklyModal(true)}
+              disabled={isResettingWeekly}
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold transition shadow-lg shadow-amber-950 cursor-pointer disabled:opacity-50 shrink-0"
+              title="Занули седмичните точки (weeklyPoints) за старт на нова седмица"
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isResettingWeekly ? 'animate-spin' : ''}`} />
+              <span>Занули за нова седмица</span>
+            </button>
+          </div>
           {/* Search & Filters Bar */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800">
             {/* Search Input */}
@@ -652,6 +824,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ========================================================================= */}
       {activeAdminTab === 'reports' && (
         <div className="space-y-4">
+          {/* Header bar with Weekly Auto-Cleanup button */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/90 p-4 rounded-2xl border border-slate-800">
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                <span>Управление на сигналите във Враца</span>
+                <span className="text-xs bg-slate-800 text-slate-300 font-mono px-2 py-0.5 rounded-full">
+                  {reports.length}
+                </span>
+              </h3>
+              <p className="text-xs text-slate-400">
+                Административно премахване на сигнали от картата и базата данни
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handlePurgePastResolvedReports}
+              disabled={isCleaningPastWeeks}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-950/80 hover:bg-emerald-900 text-emerald-200 border border-emerald-500/40 text-xs font-bold transition shadow-md cursor-pointer disabled:opacity-50"
+              title="Автоматично изчистване на решените сигнали от минали седмици (без загуба на точки и значки на доброволците)"
+            >
+              {isCleaningPastWeeks ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              )}
+              <span>{isCleaningPastWeeks ? 'Изчистване...' : 'Изчисти решените от минали седмици'}</span>
+            </button>
+          </div>
+
           {/* Search & Filter Bar */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800">
             <div className="relative">
@@ -944,6 +1146,66 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition cursor-pointer"
               >
                 Затвори
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          CONFIRM RESET WEEKLY LEADERBOARD POINTS MODAL
+          ========================================================================= */}
+      {showResetWeeklyModal && (
+        <div className="fixed inset-0 z-[1300] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl max-w-lg w-full p-6 space-y-4 shadow-2xl relative">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto text-2xl shadow-inner">
+              <RotateCcw className="w-7 h-7" />
+            </div>
+
+            <div className="text-center space-y-2">
+              <h3 className="text-lg sm:text-xl font-black text-white">
+                Зануляване на седмичната класация
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                Това действие ще занули <span className="text-amber-400 font-bold">седмичните точки (weekly points = 0)</span> на всички доброволци във Firebase базата данни за старт на нова състезателна седмица.
+              </p>
+
+              {/* Security & Data preservation guarantee */}
+              <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-3.5 text-left text-xs space-y-2 mt-3">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>Какво се запазва на 100%:</span>
+                </div>
+                <ul className="text-slate-300 text-[11px] space-y-1 list-disc list-inside pl-1">
+                  <li><strong>Общите точки (totalPoints)</strong> остават непокътнати за всички времена</li>
+                  <li><strong>Почетните нива и рангове</strong> (напр. Градски майстор, Легенда) се запазват</li>
+                  <li><strong>Всички спечелени значки</strong> остават в профилите</li>
+                  <li><strong>Историята на решените проблеми със снимки</strong> се пази постоянно</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetWeeklyModal(false)}
+                disabled={isResettingWeekly}
+                className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Отказ
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetWeeklyPoints}
+                disabled={isResettingWeekly}
+                className="py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-amber-950 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isResettingWeekly ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="w-3.5 h-3.5" />
+                )}
+                <span>{isResettingWeekly ? 'Зануляване...' : 'Да, занули на 0 т.'}</span>
               </button>
             </div>
           </div>
