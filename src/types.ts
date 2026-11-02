@@ -94,6 +94,8 @@ export interface ReportItem {
   volunteersCount: number;
   volunteers: string[];
   blurPersonalData: boolean;
+  authorName?: string;
+  authorId?: string;
   municipalNotes?: string;
   assignedDepartment?: string;
   // Resolution details

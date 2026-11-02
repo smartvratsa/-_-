@@ -64,7 +64,7 @@ export default function App() {
             (r: any) =>
               r &&
               r.id &&
-              !r.id.startsWith('rep-') &&
+              !/^rep-(10|[1-9])$/.test(String(r.id)) &&
               !(typeof r.ticketNumber === 'string' && r.ticketNumber.includes('VRZ-2026-0'))
           );
           if (nonMock.length > 0) {
@@ -175,7 +175,7 @@ export default function App() {
       .then((data) => {
         if (Array.isArray(data)) {
           const clean = data.filter(
-            (r) => !r.id.startsWith('rep-') && !r.ticketNumber?.includes('VRZ-2026-0')
+            (r) => !/^rep-(10|[1-9])$/.test(String(r.id)) && !r.ticketNumber?.includes('VRZ-2026-0')
           );
           setReports(clean);
         }
@@ -185,7 +185,7 @@ export default function App() {
     // 2. Real-time Firestore onSnapshot listener
     const unsubscribe = subscribeToReports((updatedReports) => {
       const clean = (updatedReports || []).filter(
-        (r) => !r.id.startsWith('rep-') && !r.ticketNumber?.includes('VRZ-2026-0')
+        (r) => !/^rep-(10|[1-9])$/.test(String(r.id)) && !r.ticketNumber?.includes('VRZ-2026-0')
       );
       setReports(clean);
     });
@@ -199,7 +199,7 @@ export default function App() {
       .then((data) => {
         if (Array.isArray(data) && data.length > 0) {
           const clean = data.filter(
-            (r) => !r.id.startsWith('rep-') && !r.ticketNumber?.includes('VRZ-2026-0')
+            (r) => !/^rep-(10|[1-9])$/.test(String(r.id)) && !r.ticketNumber?.includes('VRZ-2026-0')
           );
           if (clean.length > 0) {
             setReports(clean);
@@ -240,17 +240,78 @@ export default function App() {
     }, 4500);
   };
 
-  // Add new report created by citizen
+  // Add new report created by citizen + award 50 points
   const handleReportCreated = (newReport: ReportItem) => {
-    setReports((prev) => [newReport, ...prev]);
-    showToast(`Сигнал ${newReport.ticketNumber} е регистриран на картата на Враца!`);
+    // 1. Add report to local state immediately
+    setReports((prev) => [newReport, ...prev.filter((r) => r.id !== newReport.id)]);
     setActiveTab('map');
     setSelectedReportId(newReport.id);
 
-    // Save directly to Firestore
+    // 2. Award 50 points to the user for uploading/submitting a signal
+    if (currentVolunteer) {
+      const awardedPoints = 50;
+      const newWeekly = (currentVolunteer.weeklyPoints || 0) + awardedPoints;
+      const newTotal = (currentVolunteer.totalPoints || 0) + awardedPoints;
+
+      // Determine rank progression
+      let newRank = currentVolunteer.rank;
+      if (newTotal >= 1500) newRank = 'Легенда на Враца';
+      else if (newTotal >= 1000) newRank = 'Почетен гражданин';
+      else if (newTotal >= 500) newRank = 'Градски майстор';
+      else if (newTotal >= 200) newRank = 'Квартален пазител';
+
+      const reporterBadge = {
+        id: 'active-reporter',
+        name: 'Буден гражданин 📢',
+        icon: 'Sparkles',
+        description: 'Подаден градски сигнал за по-добра Враца (+50 т.)',
+        earnedDate: 'Днес'
+      };
+
+      const updatedBadges = currentVolunteer.badges.some((b) => b.id === 'active-reporter')
+        ? currentVolunteer.badges
+        : [...currentVolunteer.badges, reporterBadge];
+
+      const updatedVolunteer: VolunteerProfile = {
+        ...currentVolunteer,
+        weeklyPoints: newWeekly,
+        totalPoints: newTotal,
+        rank: newRank,
+        badges: updatedBadges
+      };
+
+      setCurrentVolunteer(updatedVolunteer);
+
+      // Direct Firestore user profile sync
+      saveUserProfileToFirestore(updatedVolunteer).catch((e) =>
+        console.warn('Could not save user profile with new points:', e)
+      );
+
+      // Direct Firestore points sync
+      addPointsToVolunteerInFirestore(currentVolunteer.id, awardedPoints, newRank).catch((e) =>
+        console.warn('Could not add points in Firestore:', e)
+      );
+
+      // Backend sync
+      fetch('/api/users/add-points', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          uid: currentVolunteer.id,
+          points: awardedPoints,
+          rank: newRank
+        })
+      }).catch(() => {});
+
+      showToast(`Сигнал ${newReport.ticketNumber} е регистриран! Спечелихте +50 точки за гражданска активност! 🎯`);
+    } else {
+      showToast(`Сигнал ${newReport.ticketNumber} е регистриран! Влезте в профила си, за да запазите +50 точки за класацията.`);
+    }
+
+    // 3. Save directly to Firestore
     saveReportToFirestore(newReport).catch((e) => console.warn('Could not save to Firestore:', e));
 
-    // Optional backend sync
+    // 4. Optional backend sync
     fetch('/api/reports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -746,6 +807,8 @@ export default function App() {
             onSelectCase={handleSelectCase}
             prefilledCoords={prefilledCoords}
             onSwitchToMap={() => setActiveTab('map')}
+            currentVolunteer={currentVolunteer}
+            onOpenLogin={handleOpenLogin}
           />
         )}
 

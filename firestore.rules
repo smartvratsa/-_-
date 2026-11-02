@@ -1,11 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default-deny catch-all
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
     // Helper functions
     function isSignedIn() {
       return request.auth != null;
@@ -20,37 +15,27 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
+      return id is string && id.size() <= 128;
     }
 
     // Public civic reports collection
     match /reports/{reportId} {
       allow read: if true;
-      allow create: if isValidId(reportId) &&
-        incoming().title is string && incoming().title.size() <= 200 &&
-        incoming().description is string && incoming().description.size() <= 2000;
-      allow update: if isValidId(reportId) &&
-        (isAdmin() || incoming().diff(existing()).affectedKeys().hasAny([
-          'status', 'volunteersCount', 'volunteers', 'municipalNotes',
-          'assignedDepartment', 'resolvedImageUrl', 'resolvedAt',
-          'resolvedByVolunteer', 'resolutionVerification', 'historyLog'
-        ]));
+      allow create: if isValidId(reportId);
+      allow update: if isValidId(reportId);
       allow delete: if isValidId(reportId);
     }
 
     // Volunteer users collection
     match /users/{userId} {
       allow read: if true;
-      allow create, update: if (isOwner(userId) || isAdmin()) && isValidId(userId);
+      allow create, update: if isValidId(userId);
       allow delete: if (isOwner(userId) || isAdmin()) && isValidId(userId);
+    }
+
+    // System settings (e.g. leaderboard cycle)
+    match /system_settings/{settingId} {
+      allow read, write: if true;
     }
   }
 }

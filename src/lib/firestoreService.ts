@@ -66,7 +66,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export function sanitizeReport(raw: any): ReportItem {
   if (!raw || typeof raw !== 'object') {
     return {
-      id: `rep-${Date.now()}`,
+      id: `sig-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       ticketNumber: `СИГ-VRZ-${Date.now().toString().slice(-4)}`,
       title: 'Сигнал за градски проблем',
       description: '',
@@ -106,7 +106,7 @@ export function sanitizeReport(raw: any): ReportItem {
   const rawAnalysis = raw.analysis || {};
 
   return {
-    id: String(raw.id || `rep-${Date.now()}`),
+    id: String(raw.id || `sig-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
     ticketNumber: String(raw.ticketNumber || `СИГ-VRZ-${Date.now().toString().slice(-4)}`),
     title: String(raw.title || 'Сигнал за градски проблем'),
     description: String(raw.description || ''),
@@ -126,6 +126,8 @@ export function sanitizeReport(raw: any): ReportItem {
       : (Array.isArray(raw.volunteers) ? raw.volunteers.length : 0),
     volunteers: Array.isArray(raw.volunteers) ? raw.volunteers : [],
     blurPersonalData: Boolean(raw.blurPersonalData),
+    authorName: raw.authorName,
+    authorId: raw.authorId,
     municipalNotes: raw.municipalNotes,
     assignedDepartment: raw.assignedDepartment,
     resolvedImageUrl: raw.resolvedImageUrl,

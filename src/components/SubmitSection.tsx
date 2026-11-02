@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { AnalysisResult, ReportItem, Coordinates } from '../types';
+import { AnalysisResult, ReportItem, Coordinates, VolunteerProfile } from '../types';
 import { SAMPLE_PHOTO_PRESETS, VRATSA_LOCATIONS, VRATSA_DISTRICTS } from '../data/mockReports';
 import { VRATSA_SOLVED_CASES } from '../data/solvedCases';
 import { AnalysisCard } from './AnalysisCard';
@@ -18,7 +18,9 @@ import {
   ShieldAlert,
   ArrowRight,
   Flame,
-  Map
+  Map,
+  Send,
+  Award
 } from 'lucide-react';
 
 interface SubmitSectionProps {
@@ -27,14 +29,58 @@ interface SubmitSectionProps {
   onSelectCase: (code: string) => void;
   prefilledCoords?: { lat: number; lng: number; districtName: string } | null;
   onSwitchToMap?: () => void;
+  currentVolunteer?: VolunteerProfile | null;
+  onOpenLogin?: () => void;
 }
+
+// Client-side image compression to guarantee smooth uploads and avoid Firestore 1MB limits
+const compressImage = (fileOrDataUrl: File | string, maxWidth = 1200, quality = 0.75): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxWidth || height > maxWidth) {
+        if (width > height) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        } else {
+          width = Math.round((width * maxWidth) / height);
+          height = maxWidth;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      } else {
+        resolve(typeof fileOrDataUrl === 'string' ? fileOrDataUrl : '');
+      }
+    };
+    img.onerror = () => resolve(typeof fileOrDataUrl === 'string' ? fileOrDataUrl : '');
+
+    if (typeof fileOrDataUrl === 'string') {
+      img.src = fileOrDataUrl;
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => {
+        img.src = reader.result as string;
+      };
+      reader.readAsDataURL(fileOrDataUrl);
+    }
+  });
+};
 
 export const SubmitSection: React.FC<SubmitSectionProps> = ({
   onReportCreated,
   userRole,
   onSelectCase,
   prefilledCoords,
-  onSwitchToMap
+  onSwitchToMap,
+  currentVolunteer,
+  onOpenLogin
 }) => {
   const [imagePreview, setImagePreview] = useState<string>('');
   const [description, setDescription] = useState<string>('');
@@ -61,17 +107,24 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     }
   }, [prefilledCoords]);
 
-  // File upload handler
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // File upload handler with compression
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
+      try {
+        const compressed = await compressImage(file);
+        setImagePreview(compressed);
         setAnalysisResult(null);
         setIsSubmittedToBoard(false);
-      };
-      reader.readAsDataURL(file);
+      } catch (_e) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setImagePreview(reader.result as string);
+          setAnalysisResult(null);
+          setIsSubmittedToBoard(false);
+        };
+        reader.readAsDataURL(file);
+      }
     }
   };
 
@@ -101,7 +154,7 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     setIsCameraActive(false);
   };
 
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (videoRef.current) {
       const canvas = document.createElement('canvas');
       canvas.width = videoRef.current.videoWidth || 640;
@@ -109,8 +162,9 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg');
-        setImagePreview(dataUrl);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        const compressed = await compressImage(dataUrl);
+        setImagePreview(compressed);
         stopCamera();
         setAnalysisResult(null);
         setIsSubmittedToBoard(false);
@@ -210,8 +264,9 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
   };
 
   // Publish to board
-  const handlePublishReport = () => {
-    if (!analysisResult) return;
+  const handlePublishReport = (overrideAnalysis?: AnalysisResult) => {
+    const activeAnalysis = overrideAnalysis || analysisResult;
+    if (!activeAnalysis) return;
 
     const activeLocation = customLocation.trim() || location;
     const ticketNum = `СИГ-VRZ-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
@@ -224,31 +279,36 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     else if (activeLocation.includes('Хижата')) neighborhood = 'Парк Хижата';
     else if (activeLocation.includes('Медковец')) neighborhood = 'ж.к. Медковец';
 
+    const authorDisplayName = currentVolunteer ? currentVolunteer.name : 'Гражданин на Враца';
+
     const newReport: ReportItem = {
-      id: `rep-${Date.now()}`,
+      id: `sig-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       ticketNumber: ticketNum,
-      title: analysisResult.problem,
-      description: description || analysisResult.problem,
+      title: activeAnalysis.problem || description || 'Градски сигнал',
+      description: description || activeAnalysis.problem || 'Сигнал за проблем във Враца',
       location: activeLocation,
       neighborhood: neighborhood,
       coordinates: selectedCoordinates,
       imageUrl: imagePreview || 'https://images.unsplash.com/photo-1541123437800-1bb1317badc2?auto=format&fit=crop&w=800&q=80',
       createdAt: 'Току-що',
-      analysis: analysisResult,
-      status: analysisResult.path === 'blue' ? 'одобрен' : 'нови',
+      analysis: activeAnalysis,
+      status: activeAnalysis.path === 'blue' ? 'одобрен' : 'нови',
       volunteersCount: 0,
       volunteers: [],
-      blurPersonalData: analysisResult.contains_personal_data,
+      blurPersonalData: activeAnalysis.contains_personal_data,
+      authorName: authorDisplayName,
+      authorId: currentVolunteer?.id,
       historyLog: [
         {
           timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          actor: 'Гражданин',
-          action: `Подаден сигнал (${ticketNum}) на картата на Враца`
+          actor: authorDisplayName,
+          action: `Подаден сигнал (${ticketNum}) на картата на Враца (+50 т.)`,
+          badge: '+50 т.'
         },
         {
           timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           actor: 'AI Градски помощник Враца',
-          action: `Определен индекс на наложителност: ${analysisResult.urgencyScore || 60}/100. Път: "${analysisResult.path}".`,
+          action: `Определен индекс на наложителност: ${activeAnalysis.urgencyScore || 50}/100. Път: "${activeAnalysis.path}".`,
           badge: 'AI Оценка'
         }
       ]
@@ -256,6 +316,18 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
 
     onReportCreated(newReport);
     setIsSubmittedToBoard(true);
+  };
+
+  // Direct 1-click submit without needing to wait for AI analysis button
+  const handleDirectSubmit = () => {
+    if (!imagePreview && !description.trim()) {
+      setErrorMessage('Моля, качете снимка или напишете кратко описание на проблема.');
+      return;
+    }
+    const activeLocation = customLocation.trim() || location;
+    const directAnalysis = analysisResult || generateClientAnalysis(description, activeLocation);
+    setAnalysisResult(directAnalysis);
+    handlePublishReport(directAnalysis);
   };
 
   const handleResetForm = () => {
@@ -514,25 +586,61 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
             </div>
           )}
 
-          {/* Analyze action button */}
-          <button
-            type="button"
-            disabled={isAnalyzing || (!imagePreview && !description)}
-            onClick={handleAnalyze}
-            className="w-full py-3 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl shadow-lg shadow-emerald-950 flex items-center justify-center gap-2 transition-all"
-          >
-            {isAnalyzing ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin text-emerald-200" />
-                <span>AI анализира наложителността и генерира план...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-5 h-5 text-emerald-200" />
-                <span>AI Анализ на наложителността</span>
-              </>
-            )}
-          </button>
+          {/* 50 Points Citizen Bonus Notice */}
+          <div className="p-3.5 bg-gradient-to-r from-emerald-950/70 via-slate-900 to-amber-950/30 border border-emerald-500/40 rounded-2xl flex items-center justify-between gap-3 shadow-md">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center font-bold text-lg shrink-0 border border-amber-500/30">
+                ⭐
+              </div>
+              <div>
+                <span className="text-xs font-bold text-white block">
+                  Награда: +50 точки за всеки подаден сигнал!
+                </span>
+                <span className="text-[11px] text-emerald-300 font-medium">
+                  {currentVolunteer ? (
+                    <>Ще се добавят директно към профила на: <strong className="text-white">{currentVolunteer.name}</strong></>
+                  ) : (
+                    'Запазете ги веднага в доброволческата класация на Враца'
+                  )}
+                </span>
+              </div>
+            </div>
+            <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-1 rounded-full text-xs font-mono font-black shrink-0">
+              +50 т.
+            </span>
+          </div>
+
+          {/* Actions: AI Analysis or Direct 1-Click Submission */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <button
+              type="button"
+              disabled={isAnalyzing || (!imagePreview && !description.trim())}
+              onClick={handleAnalyze}
+              className="py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl border border-slate-700 hover:border-emerald-500/50 flex items-center justify-center gap-2 transition cursor-pointer shadow-md"
+            >
+              {isAnalyzing ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-emerald-300" />
+                  <span>AI Анализира...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 text-emerald-400" />
+                  <span>1. AI Анализ</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              disabled={isAnalyzing || (!imagePreview && !description.trim())}
+              onClick={handleDirectSubmit}
+              className="py-3 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-emerald-950 flex items-center justify-center gap-2 transition cursor-pointer hover:scale-[1.01] active:scale-98"
+            >
+              <Send className="w-4 h-4 text-white" />
+              <span>Подай сигнал (+50 т.)</span>
+            </button>
+          </div>
         </div>
 
         {/* Right Column: AI Analysis Result & Action Card */}
@@ -573,22 +681,22 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
               {!isSubmittedToBoard ? (
                 <button
                   type="button"
-                  onClick={handlePublishReport}
-                  className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm rounded-xl shadow-xl flex items-center justify-center gap-2 transition"
+                  onClick={() => handlePublishReport()}
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-sm rounded-xl shadow-xl flex items-center justify-center gap-2 transition cursor-pointer shadow-emerald-950"
                 >
-                  <CheckCircle className="w-5 h-5 text-blue-200" />
-                  <span>Потвърди и регистрирай сигнала на картата на Враца</span>
+                  <CheckCircle className="w-5 h-5 text-emerald-200" />
+                  <span>Потвърди и регистрирай сигнала (+50 т.)</span>
                 </button>
               ) : (
                 <div className="p-4 bg-emerald-950/40 border border-emerald-500/40 rounded-xl text-center space-y-2">
                   <div className="flex items-center justify-center gap-2 text-emerald-300 font-bold text-sm">
                     <CheckCircle className="w-5 h-5 text-emerald-400" />
-                    <span>Сигналът е записан успешно и се вижда на картата!</span>
+                    <span>Сигналът е записан успешно и получихте +50 точки!</span>
                   </div>
                   <button
                     type="button"
                     onClick={handleResetForm}
-                    className="text-xs text-slate-300 underline hover:text-white"
+                    className="text-xs text-slate-300 underline hover:text-white cursor-pointer"
                   >
                     Подай друг сигнал
                   </button>
