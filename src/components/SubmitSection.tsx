@@ -20,7 +20,10 @@ import {
   Flame,
   Map,
   Send,
-  Award
+  Award,
+  ArrowUp,
+  Navigation,
+  Image as ImageIcon
 } from 'lucide-react';
 
 interface SubmitSectionProps {
@@ -93,17 +96,67 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmittedToBoard, setIsSubmittedToBoard] = useState<boolean>(false);
   const [activePresetName, setActivePresetName] = useState<string | null>(null);
+  const [isGpsDetected, setIsGpsDetected] = useState<boolean>(false);
+  const [gpsStatusText, setGpsStatusText] = useState<string>('Търсене на локация...');
+  const [showScrollTopBtn, setShowScrollTopBtn] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const formSectionRef = useRef<HTMLDivElement>(null);
+  const topSectionRef = useRef<HTMLDivElement>(null);
 
-  // When prefilled coordinates are received from map pin drop
+  // Scroll spy to show "Go to top" button on phone
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollTopBtn(window.scrollY > 200);
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // AUTO-GPS: Automatically detect user's exact location on form load
   useEffect(() => {
     if (prefilledCoords) {
       setSelectedCoordinates({ lat: prefilledCoords.lat, lng: prefilledCoords.lng });
-      setCustomLocation(`ул./район във Враца (координати: ${prefilledCoords.lat.toFixed(4)}, ${prefilledCoords.lng.toFixed(4)}) - кв. ${prefilledCoords.districtName}`);
+      setCustomLocation(`ул./район във Враца (GPS: ${prefilledCoords.lat.toFixed(4)}, ${prefilledCoords.lng.toFixed(4)}) - кв. ${prefilledCoords.districtName}`);
+      setIsGpsDetected(true);
+      setGpsStatusText(`Посочена локация от картата: кв. ${prefilledCoords.districtName}`);
+      return;
+    }
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          setSelectedCoordinates({ lat, lng });
+
+          // Find closest district in Vratsa
+          let nearestDistrict = 'Център';
+          let minDistance = Infinity;
+          VRATSA_DISTRICTS.forEach((d) => {
+            if (d.id === 'all') return;
+            const dist = Math.hypot(d.lat - lat, d.lng - lng);
+            if (dist < minDistance) {
+              minDistance = dist;
+              nearestDistrict = d.name;
+            }
+          });
+
+          setIsGpsDetected(true);
+          const detectedStr = `кв. ${nearestDistrict}, гр. Враца (GPS: ${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+          setCustomLocation(detectedStr);
+          setGpsStatusText(`Автоматично открита GPS локация: кв. ${nearestDistrict} (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
+        },
+        (err) => {
+          console.warn('Auto GPS not granted or error:', err);
+          setIsGpsDetected(false);
+          setGpsStatusText('Локацията по подразбиране е Център, Враца (можете да включите GPS)');
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
+      );
     }
   }, [prefilledCoords]);
 
@@ -118,7 +171,7 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
         setIsSubmittedToBoard(false);
       } catch (_e) {
         const reader = new FileReader();
-        reader.onloadend = () => {
+        reader.onload = () => {
           setImagePreview(reader.result as string);
           setAnalysisResult(null);
           setIsSubmittedToBoard(false);
@@ -140,9 +193,10 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
         videoRef.current.srcObject = stream;
       }
     } catch (err) {
-      console.error('Camera access error:', err);
+      console.warn('Camera access error, fallback to native camera input:', err);
       setIsCameraActive(false);
-      setErrorMessage('Не може да бъде осъществен достъп до камерата на устройството.');
+      // Fallback directly to native camera input which works 100% on phones
+      cameraInputRef.current?.click();
     }
   };
 
@@ -172,7 +226,7 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     }
   };
 
-  // Preset selector with active highlight and smooth auto-scroll to form
+  // Preset selector
   const selectPreset = (preset: typeof SAMPLE_PHOTO_PRESETS[0]) => {
     setActivePresetName(preset.name);
     setImagePreview(preset.imageUrl);
@@ -180,37 +234,61 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     setLocation(preset.location);
     if (preset.coordinates) {
       setSelectedCoordinates(preset.coordinates);
+      setIsGpsDetected(true);
+      setGpsStatusText(`Зададена локация за пример: ${preset.neighborhood} (${preset.coordinates.lat}, ${preset.coordinates.lng})`);
     }
     setAnalysisResult(null);
     setIsSubmittedToBoard(false);
     setErrorMessage(null);
 
-    // Smoothly scroll down to the form so phone users immediately see the loaded problem
+    // Gently scroll to form on mobile
     setTimeout(() => {
       formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 80);
+    }, 50);
   };
 
-  // GPS geolocation
+  // Manual GPS refresh button
   const handleGetGPSLocation = () => {
-    if ('geolocation' in navigator) {
+    if (navigator.geolocation) {
+      setGpsStatusText('Засичане на точни GPS координати...');
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const lat = position.coords.latitude;
           const lng = position.coords.longitude;
           setSelectedCoordinates({ lat, lng });
-          const coords = `GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)} (Враца)`;
-          setLocation(coords);
+
+          let nearestDistrict = 'Център';
+          let minDistance = Infinity;
+          VRATSA_DISTRICTS.forEach((d) => {
+            if (d.id === 'all') return;
+            const dist = Math.hypot(d.lat - lat, d.lng - lng);
+            if (dist < minDistance) {
+              minDistance = dist;
+              nearestDistrict = d.name;
+            }
+          });
+
+          setIsGpsDetected(true);
+          const coords = `кв. ${nearestDistrict}, Враца (GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)})`;
+          setCustomLocation(coords);
+          setGpsStatusText(`✓ Локация: кв. ${nearestDistrict} (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
         },
         () => {
           setLocation('пл. „Христо Ботев“, Център, Враца');
           setSelectedCoordinates({ lat: 43.2032, lng: 23.5474 });
-        }
+          setGpsStatusText('Неуспешно засичане на GPS. Използва се център Враца.');
+        },
+        { enableHighAccuracy: true, timeout: 8000 }
       );
     }
   };
 
-  // Trigger Gemini Analysis with client fallback for static hosting
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    topSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // Trigger Gemini Analysis
   const handleAnalyze = async () => {
     if (!imagePreview && !description) {
       setErrorMessage('Моля, качете снимка или опишете проблема (напр. счупено осветление, дупка или боклук).');
@@ -226,13 +304,10 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
 
     try {
       let data: AnalysisResult | null = null;
-
       try {
         const response = await fetch('/api/analyze-issue', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             image: imagePreview,
             description: description,
@@ -245,10 +320,9 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
           data = await response.json();
         }
       } catch (_fetchErr) {
-        // Static hosting fallback (e.g. GitHub Pages without Node backend)
+        // Fallback
       }
 
-      // If backend was unreachable or returned non-200, compute with intelligent client engine
       if (!data) {
         data = generateClientAnalysis(description, activeLocation);
       }
@@ -271,7 +345,6 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     const activeLocation = customLocation.trim() || location;
     const ticketNum = `СИГ-VRZ-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
 
-    // extract neighborhood guess
     let neighborhood = 'Център';
     if (activeLocation.includes('Дъбника')) neighborhood = 'ж.к. Дъбника';
     else if (activeLocation.includes('Младост')) neighborhood = 'ж.к. Младост';
@@ -318,7 +391,7 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     setIsSubmittedToBoard(true);
   };
 
-  // Direct 1-click submit without needing to wait for AI analysis button
+  // Direct 1-click submit
   const handleDirectSubmit = () => {
     if (!imagePreview && !description.trim()) {
       setErrorMessage('Моля, качете снимка или напишете кратко описание на проблема.');
@@ -342,28 +415,51 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
   };
 
   return (
-    <div className="space-y-8 animate-fadeIn">
+    <div ref={topSectionRef} className="space-y-6 sm:space-y-8 animate-fadeIn pb-28">
+      {/* Floating Scroll-to-Top Button for Phone */}
+      {showScrollTopBtn && (
+        <button
+          type="button"
+          onClick={scrollToTop}
+          className="fixed bottom-24 right-4 z-40 bg-emerald-600 hover:bg-emerald-500 text-white p-3 rounded-full shadow-2xl border-2 border-emerald-300 transition-all active:scale-90 flex items-center justify-center cursor-pointer"
+          title="Отиди най-отгоре"
+        >
+          <ArrowUp className="w-5 h-5 text-white" />
+        </button>
+      )}
+
       {/* Introduction Hero Card */}
-      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/40 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl relative overflow-hidden">
+      <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-emerald-950/40 border border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl relative overflow-hidden">
         <div className="max-w-3xl space-y-3 relative z-10">
           <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/30 px-3 py-1 rounded-full text-xs font-semibold text-emerald-300">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>AI Оценка на наложителност и план за действие</span>
+            <span>AI Оценка на наложителност и автоматична GPS карта</span>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+          <h2 className="text-xl sm:text-3xl font-extrabold text-white tracking-tight">
             Подай сигнал за проблем във Враца
           </h2>
           <p className="text-slate-300 text-xs sm:text-sm leading-relaxed">
-            Сигнализирайте за счупено осветление, дупки, повредени пейки или отпадъци. Изкуственият интелект определя степента на наложителност (1-100), позиционира сигнала на градската карта и насочва задачата към доброволци или компетентните аварийни служби.
+            Сигнализирайте за счупено осветление, дупки, пейки или отпадъци. Вашето GPS местоположение се засича автоматично и сигналът се нанася директно на интерактивната карта на Враца!
           </p>
         </div>
 
         {/* Quick Scenario Tester Presets with Active Highlight */}
         <div className="mt-5 pt-4 border-t border-slate-800/80">
-          <span className="text-xs font-semibold text-slate-300 block mb-2.5">
-            Тествай бърз примерен сигнал за Враца (кликнете за автоматично зареждане и скролване):
-          </span>
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-xs font-bold text-slate-300 block">
+              Тествай бърз примерен сигнал за Враца:
+            </span>
+            <button
+              type="button"
+              onClick={() => formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className="text-[11px] text-emerald-400 font-semibold hover:underline flex items-center gap-1 sm:hidden"
+            >
+              <span>Към формата</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
             {SAMPLE_PHOTO_PRESETS.map((preset, idx) => {
               const isSelected = activePresetName === preset.name;
               return (
@@ -371,15 +467,19 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
                   key={idx}
                   type="button"
                   onClick={() => selectPreset(preset)}
-                  className={`text-xs px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 font-semibold cursor-pointer select-none ${
+                  className={`text-xs p-2.5 rounded-xl transition-all flex items-center gap-2 font-semibold cursor-pointer text-left ${
                     isSelected
-                      ? 'bg-emerald-600 text-white border-2 border-emerald-400 shadow-lg shadow-emerald-950 ring-2 ring-emerald-400/50 scale-105'
-                      : 'bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-emerald-500/50'
+                      ? 'bg-emerald-600 text-white border-2 border-emerald-400 shadow-lg shadow-emerald-950 ring-2 ring-emerald-400/50 scale-[1.02]'
+                      : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-emerald-500/50'
                   }`}
                   title={`Зареди: ${preset.name}`}
                 >
-                  {isSelected && <span className="text-emerald-200 font-black">✓</span>}
-                  <span>{preset.name}</span>
+                  <span className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 text-xs font-bold ${
+                    isSelected ? 'bg-white text-emerald-800' : 'bg-slate-700 text-slate-300'
+                  }`}>
+                    {isSelected ? '✓' : idx + 1}
+                  </span>
+                  <span className="truncate flex-1">{preset.name}</span>
                 </button>
               );
             })}
@@ -389,335 +489,382 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
 
       {/* Main Submission Form Grid with auto-scroll reference */}
       <div ref={formSectionRef} className="space-y-4">
+        {/* Banner if Preset is loaded */}
         {activePresetName && (
-          <div className="bg-emerald-950/70 border border-emerald-500/50 px-4 py-2.5 rounded-2xl text-xs text-emerald-200 flex items-center justify-between shadow-lg animate-in fade-in duration-200">
+          <div className="bg-emerald-950/70 border border-emerald-500/50 p-3 sm:px-4 sm:py-2.5 rounded-2xl text-xs text-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-lg animate-in fade-in duration-200">
             <span className="flex items-center gap-2 font-medium">
               <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>Зареден примерен сигнал: <strong className="text-white underline">{activePresetName}</strong></span>
             </span>
-            <span className="text-[11px] text-emerald-400 font-mono hidden sm:inline">Снимката и адресът са попълнени</span>
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] text-emerald-400 font-mono">Снимката и адресът са заредени</span>
+              <button
+                type="button"
+                onClick={scrollToTop}
+                className="text-[11px] bg-slate-800 hover:bg-slate-700 text-white px-2 py-0.5 rounded-lg border border-slate-700 flex items-center gap-1"
+              >
+                <ArrowUp className="w-3 h-3" />
+                <span>Най-горе</span>
+              </button>
+            </div>
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:gap-8 items-start">
           {/* Left Column: Input and Capture */}
-          <div className="lg:col-span-6 bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6 shadow-xl">
+          <div className="lg:col-span-6 bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 sm:space-y-6 shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="font-bold text-white text-base flex items-center gap-2">
+              <h3 className="font-bold text-white text-sm sm:text-base flex items-center gap-2">
                 <Upload className="w-5 h-5 text-emerald-400" />
-                <span>1. Снимка и локация на проблема</span>
+                <span>1. Снимка и GPS локация на проблема</span>
               </h3>
-            {imagePreview && (
-              <button
-                type="button"
-                onClick={handleResetForm}
-                className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>Изчисти</span>
-              </button>
-            )}
-          </div>
+              {imagePreview && (
+                <button
+                  type="button"
+                  onClick={handleResetForm}
+                  className="text-xs text-slate-400 hover:text-white flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Изчисти</span>
+                </button>
+              )}
+            </div>
 
-          {/* Photo Uploader / Camera */}
-          <div className="space-y-3">
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
-              Снимка на проблема:
-            </label>
+            {/* Photo Uploader / Camera */}
+            <div className="space-y-3">
+              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                Снимка на проблема:
+              </label>
 
-            {isCameraActive ? (
-              <div className="relative rounded-xl overflow-hidden bg-black border border-slate-700 aspect-video flex items-center justify-center">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute bottom-3 inset-x-0 flex items-center justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={capturePhoto}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2 rounded-full shadow-lg flex items-center gap-1.5 transition"
-                  >
-                    <Camera className="w-4 h-4" />
-                    <span>Направи снимка</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stopCamera}
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-4 py-2 rounded-full transition"
-                  >
-                    Затвори
-                  </button>
+              {isCameraActive ? (
+                <div className="relative rounded-xl overflow-hidden bg-black border border-slate-700 aspect-video flex items-center justify-center">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute bottom-3 inset-x-0 flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={capturePhoto}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2 rounded-full shadow-lg flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>Направи снимка</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopCamera}
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs px-4 py-2 rounded-full transition cursor-pointer"
+                    >
+                      Затвори
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : imagePreview ? (
-              <div className="relative rounded-xl overflow-hidden border border-slate-700 aspect-video bg-slate-950 group">
-                <img
-                  src={imagePreview}
-                  alt="Преглед на проблема"
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-black/60 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition flex items-center justify-center gap-3">
+              ) : imagePreview ? (
+                <div className="relative rounded-xl overflow-hidden border border-slate-700 aspect-video bg-slate-950 group">
+                  <img
+                    src={imagePreview}
+                    alt="Преглед на проблема"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-black/60 opacity-90 sm:opacity-0 sm:group-hover:opacity-100 transition flex items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="bg-slate-800/90 hover:bg-slate-700 text-white text-xs px-3.5 py-2 rounded-xl border border-slate-600 font-semibold shadow-lg transition cursor-pointer"
+                    >
+                      Смени снимка
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImagePreview('')}
+                      className="bg-red-900/90 hover:bg-red-800 text-white text-xs px-3.5 py-2 rounded-xl border border-red-700 font-semibold shadow-lg transition cursor-pointer"
+                    >
+                      Премахни
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="bg-slate-800/90 hover:bg-slate-700 text-white text-xs px-3.5 py-2 rounded-xl border border-slate-600 font-semibold shadow-lg transition cursor-pointer"
+                    className="border-2 border-dashed border-slate-700 hover:border-emerald-500 rounded-xl p-4 sm:p-5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-800/40 transition group cursor-pointer active:scale-95"
                   >
-                    Смени снимка
+                    <Upload className="w-6 h-6 text-slate-400 group-hover:text-emerald-400 transition" />
+                    <span className="text-xs font-semibold text-slate-200">
+                      Качи снимка от галерия
+                    </span>
+                    <span className="text-[10px] text-slate-500">
+                      JPG, PNG, WEBP
+                    </span>
                   </button>
+
                   <button
                     type="button"
-                    onClick={() => setImagePreview('')}
-                    className="bg-red-900/90 hover:bg-red-800 text-white text-xs px-3.5 py-2 rounded-xl border border-red-700 font-semibold shadow-lg transition cursor-pointer"
+                    onClick={startCamera}
+                    className="border-2 border-dashed border-slate-700 hover:border-emerald-500 rounded-xl p-4 sm:p-5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-800/40 transition group cursor-pointer active:scale-95"
                   >
-                    Премахни
+                    <Camera className="w-6 h-6 text-emerald-400 group-hover:scale-110 transition" />
+                    <span className="text-xs font-semibold text-slate-200">
+                      Снимай с камера
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-medium">
+                      Директно от телефона
+                    </span>
                   </button>
                 </div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-slate-700 hover:border-emerald-500 rounded-xl p-5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-800/40 transition group"
-                >
-                  <Upload className="w-6 h-6 text-slate-400 group-hover:text-emerald-400 transition" />
-                  <span className="text-xs font-semibold text-slate-200">
-                    Качи снимка от файл
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    JPG, PNG или WEBP
-                  </span>
-                </button>
+              )}
 
+              {/* Hidden file inputs: standard file and native camera capture */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              <input
+                ref={cameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </div>
+
+            {/* Description */}
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                Кратко описание на проблема:
+              </label>
+              <textarea
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Напр. Счупена лампа на уличен стълб с оголени кабели, или дълбока дупка на платното..."
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
+              />
+            </div>
+
+            {/* Location & Automatic GPS */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Локация на интерактивната карта:</span>
+                </label>
+                {onSwitchToMap && (
+                  <button
+                    type="button"
+                    onClick={onSwitchToMap}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold cursor-pointer"
+                  >
+                    <Map className="w-3.5 h-3.5" />
+                    <span>Отвори картата</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Automatic GPS status alert card */}
+              <div className={`p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+                isGpsDetected
+                  ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300'
+                  : 'bg-slate-950 border-slate-800 text-slate-400'
+              }`}>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Navigation className={`w-4 h-4 shrink-0 ${isGpsDetected ? 'text-emerald-400' : 'text-slate-500'}`} />
+                  <span className="truncate font-medium text-[11px]">{gpsStatusText}</span>
+                </div>
                 <button
                   type="button"
-                  onClick={startCamera}
-                  className="border-2 border-dashed border-slate-700 hover:border-emerald-500 rounded-xl p-5 flex flex-col items-center justify-center text-center gap-2 hover:bg-slate-800/40 transition group"
+                  onClick={handleGetGPSLocation}
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[10px] font-bold shrink-0 transition flex items-center gap-1 border border-slate-700 cursor-pointer"
                 >
-                  <Camera className="w-6 h-6 text-slate-400 group-hover:text-emerald-400 transition" />
-                  <span className="text-xs font-semibold text-slate-200">
-                    Снимай с камера
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    Директно от телефон/лаптоп
-                  </span>
+                  <Crosshair className="w-3 h-3 text-emerald-400" />
+                  <span>Обнови GPS</span>
                 </button>
+              </div>
+
+              <div className="flex gap-2">
+                <select
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                >
+                  {VRATSA_LOCATIONS.map((loc, idx) => (
+                    <option key={idx} value={loc}>
+                      {loc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <input
+                type="text"
+                value={customLocation}
+                onChange={(e) => setCustomLocation(e.target.value)}
+                placeholder="Или въведете точен адрес / номер на блок / квартал"
+                className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
+              />
+            </div>
+
+            {errorMessage && (
+              <div className="p-3 bg-red-950/40 border border-red-500/50 rounded-xl text-xs text-red-300 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{errorMessage}</span>
               </div>
             )}
 
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-          </div>
-
-          {/* Description */}
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider">
-              Кратко описание на проблема:
-            </label>
-            <textarea
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Напр. Счупена лампа на стълб срещу театъра с висящ кабел, или счупени дъски на пейка в парка..."
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
-            />
-          </div>
-
-          {/* Location */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                Местоположение във Враца:
-              </label>
-              {onSwitchToMap && (
-                <button
-                  type="button"
-                  onClick={onSwitchToMap}
-                  className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold"
-                >
-                  <Map className="w-3.5 h-3.5" />
-                  Посочи на картата
-                </button>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <select
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-              >
-                {VRATSA_LOCATIONS.map((loc, idx) => (
-                  <option key={idx} value={loc}>
-                    {loc}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={handleGetGPSLocation}
-                title="Вземи моята GPS локация"
-                className="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 p-2 rounded-xl transition"
-              >
-                <Crosshair className="w-4 h-4 text-emerald-400" />
-              </button>
-            </div>
-
-            <input
-              type="text"
-              value={customLocation}
-              onChange={(e) => setCustomLocation(e.target.value)}
-              placeholder="Или въведете точен адрес / номер на блок / квартал"
-              className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition"
-            />
-          </div>
-
-          {errorMessage && (
-            <div className="p-3 bg-red-950/40 border border-red-500/50 rounded-xl text-xs text-red-300 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-              <span>{errorMessage}</span>
-            </div>
-          )}
-
-          {/* 50 Points Citizen Bonus Notice */}
-          <div className="p-3.5 bg-gradient-to-r from-emerald-950/70 via-slate-900 to-amber-950/30 border border-emerald-500/40 rounded-2xl flex items-center justify-between gap-3 shadow-md">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center font-bold text-lg shrink-0 border border-amber-500/30">
-                ⭐
-              </div>
-              <div>
-                <span className="text-xs font-bold text-white block">
-                  Награда: +50 точки за всеки подаден сигнал!
-                </span>
-                <span className="text-[11px] text-emerald-300 font-medium">
-                  {currentVolunteer ? (
-                    <>Ще се добавят директно към профила на: <strong className="text-white">{currentVolunteer.name}</strong></>
-                  ) : (
-                    'Запазете ги веднага в доброволческата класация на Враца'
-                  )}
-                </span>
-              </div>
-            </div>
-            <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-1 rounded-full text-xs font-mono font-black shrink-0">
-              +50 т.
-            </span>
-          </div>
-
-          {/* Actions: AI Analysis or Direct 1-Click Submission */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            <button
-              type="button"
-              disabled={isAnalyzing || (!imagePreview && !description.trim())}
-              onClick={handleAnalyze}
-              className="py-3 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl border border-slate-700 hover:border-emerald-500/50 flex items-center justify-center gap-2 transition cursor-pointer shadow-md"
-            >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-emerald-300" />
-                  <span>AI Анализира...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 text-emerald-400" />
-                  <span>1. AI Анализ</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              disabled={isAnalyzing || (!imagePreview && !description.trim())}
-              onClick={handleDirectSubmit}
-              className="py-3 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-emerald-950 flex items-center justify-center gap-2 transition cursor-pointer hover:scale-[1.01] active:scale-98"
-            >
-              <Send className="w-4 h-4 text-white" />
-              <span>Подай сигнал (+50 т.)</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Right Column: AI Analysis Result & Action Card */}
-        <div className="lg:col-span-6 space-y-6">
-          {analysisResult ? (
-            <div className="space-y-6 animate-scaleIn">
-              {/* Urgency Highlight banner */}
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Flame className={`w-5 h-5 ${
-                    analysisResult.urgencyScore >= 80 ? 'text-red-400' : analysisResult.urgencyScore >= 50 ? 'text-amber-400' : 'text-blue-400'
-                  }`} />
-                  <div>
-                    <span className="text-xs text-slate-400 block font-medium">Оценена AI Наложителност:</span>
-                    <span className="text-sm font-bold text-white">
-                      {analysisResult.urgencyRationale || `Приоритет: ${analysisResult.priority}`}
-                    </span>
-                  </div>
+            {/* 50 Points Citizen Bonus Notice */}
+            <div className="p-3.5 bg-gradient-to-r from-emerald-950/70 via-slate-900 to-amber-950/30 border border-emerald-500/40 rounded-2xl flex items-center justify-between gap-3 shadow-md">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 flex items-center justify-center font-bold text-lg shrink-0 border border-amber-500/30">
+                  ⭐
                 </div>
-                <div className="text-right">
-                  <span className={`text-2xl font-mono font-extrabold tabular-nums ${
-                    analysisResult.urgencyScore >= 80 ? 'text-red-400' : analysisResult.urgencyScore >= 50 ? 'text-amber-400' : 'text-blue-400'
-                  }`}>
-                    {analysisResult.urgencyScore || 60}/100
+                <div>
+                  <span className="text-xs font-bold text-white block">
+                    Награда: +50 точки за всеки подаден сигнал!
+                  </span>
+                  <span className="text-[11px] text-emerald-300 font-medium">
+                    {currentVolunteer ? (
+                      <>Ще се добавят директно към профила на: <strong className="text-white">{currentVolunteer.name}</strong></>
+                    ) : (
+                      'Запазете ги веднага в доброволческата класация на Враца'
+                    )}
                   </span>
                 </div>
               </div>
+              <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-1 rounded-full text-xs font-mono font-black shrink-0">
+                +50 т.
+              </span>
+            </div>
 
-              {/* Full Analysis Card */}
-              <AnalysisCard
-                analysis={analysisResult}
-                imageUrl={imagePreview}
-                userRole={userRole}
-                onSelectCase={onSelectCase}
-              />
+            {/* Actions: AI Analysis or Direct 1-Click Submission */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <button
+                type="button"
+                disabled={isAnalyzing || (!imagePreview && !description.trim())}
+                onClick={handleAnalyze}
+                className="py-3.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm rounded-xl border border-slate-700 hover:border-emerald-500/50 flex items-center justify-center gap-2 transition cursor-pointer shadow-md active:scale-98"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-emerald-300" />
+                    <span>AI Анализира...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-emerald-400" />
+                    <span>1. AI Анализ</span>
+                  </>
+                )}
+              </button>
 
-              {/* Confirmation / Publish Button */}
-              {!isSubmittedToBoard ? (
-                <button
-                  type="button"
-                  onClick={() => handlePublishReport()}
-                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-sm rounded-xl shadow-xl flex items-center justify-center gap-2 transition cursor-pointer shadow-emerald-950"
-                >
-                  <CheckCircle className="w-5 h-5 text-emerald-200" />
-                  <span>Потвърди и регистрирай сигнала (+50 т.)</span>
-                </button>
-              ) : (
-                <div className="p-4 bg-emerald-950/40 border border-emerald-500/40 rounded-xl text-center space-y-2">
-                  <div className="flex items-center justify-center gap-2 text-emerald-300 font-bold text-sm">
-                    <CheckCircle className="w-5 h-5 text-emerald-400" />
-                    <span>Сигналът е записан успешно и получихте +50 точки!</span>
+              <button
+                type="button"
+                disabled={isAnalyzing || (!imagePreview && !description.trim())}
+                onClick={handleDirectSubmit}
+                className="py-3.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-emerald-950 flex items-center justify-center gap-2 transition cursor-pointer hover:scale-[1.01] active:scale-98"
+              >
+                <Send className="w-4 h-4 text-white" />
+                <span>Подай сигнал (+50 т.)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Right Column: AI Analysis Result & Action Card */}
+          <div className="lg:col-span-6 space-y-5 sm:space-y-6">
+            {analysisResult ? (
+              <div className="space-y-5 sm:space-y-6 animate-scaleIn">
+                {/* Urgency Highlight banner */}
+                <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl flex items-center justify-between shadow-xl">
+                  <div className="flex items-center gap-2.5">
+                    <Flame className={`w-5 h-5 ${
+                      analysisResult.urgencyScore >= 80 ? 'text-red-400 animate-pulse' : analysisResult.urgencyScore >= 50 ? 'text-amber-400' : 'text-blue-400'
+                    }`} />
+                    <div>
+                      <span className="text-xs text-slate-400 block font-medium">Оценена AI Наложителност:</span>
+                      <span className="text-sm font-bold text-white">
+                        {analysisResult.urgencyRationale || `Приоритет: ${analysisResult.priority}`}
+                      </span>
+                    </div>
                   </div>
+                  <div className="text-right">
+                    <span className={`text-2xl font-mono font-extrabold tabular-nums ${
+                      analysisResult.urgencyScore >= 80 ? 'text-red-400' : analysisResult.urgencyScore >= 50 ? 'text-amber-400' : 'text-blue-400'
+                    }`}>
+                      {analysisResult.urgencyScore || 60}/100
+                    </span>
+                  </div>
+                </div>
+
+                {/* Full Analysis Card */}
+                <AnalysisCard
+                  analysis={analysisResult}
+                  imageUrl={imagePreview}
+                  userRole={userRole}
+                  onSelectCase={onSelectCase}
+                />
+
+                {/* Confirmation / Publish Button */}
+                {!isSubmittedToBoard ? (
                   <button
                     type="button"
-                    onClick={handleResetForm}
-                    className="text-xs text-slate-300 underline hover:text-white cursor-pointer"
+                    onClick={() => handlePublishReport()}
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-sm rounded-xl shadow-xl flex items-center justify-center gap-2 transition cursor-pointer shadow-emerald-950 active:scale-98"
                   >
-                    Подай друг сигнал
+                    <CheckCircle className="w-5 h-5 text-emerald-200" />
+                    <span>Потвърди и регистрирай сигнала (+50 т.)</span>
                   </button>
+                ) : (
+                  <div className="p-5 bg-emerald-950/50 border border-emerald-500/50 rounded-2xl text-center space-y-3 shadow-xl">
+                    <div className="flex items-center justify-center gap-2 text-emerald-300 font-bold text-sm">
+                      <CheckCircle className="w-6 h-6 text-emerald-400" />
+                      <span>Сигналът е записан успешно и получихте +50 точки!</span>
+                    </div>
+                    <p className="text-xs text-slate-300">
+                      Сигналът вече се вижда върху интерактивната карта на Враца с точните му координати.
+                    </p>
+                    <div className="flex items-center justify-center gap-3 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleResetForm}
+                        className="px-4 py-2 bg-slate-800 hover:bg-slate-750 text-white text-xs font-semibold rounded-xl border border-slate-700 transition cursor-pointer"
+                      >
+                        Подай друг сигнал
+                      </button>
+                      {onSwitchToMap && (
+                        <button
+                          type="button"
+                          onClick={onSwitchToMap}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl shadow-lg transition cursor-pointer"
+                        >
+                          Виж на картата
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center text-slate-400 space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-slate-800/80 flex items-center justify-center mx-auto text-emerald-400">
+                  <Sparkles className="w-6 h-6" />
                 </div>
-              )}
-            </div>
-          ) : (
-            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 space-y-4">
-              <div className="w-12 h-12 rounded-2xl bg-slate-800/80 flex items-center justify-center mx-auto text-emerald-400">
-                <Sparkles className="w-6 h-6" />
+                <div className="space-y-1">
+                  <h4 className="font-bold text-white text-base">Очаква се снимка и описание</h4>
+                  <p className="text-xs max-w-sm mx-auto text-slate-400 leading-relaxed">
+                    След като качите снимка или изберете примерен сигнал, AI ще разпознае проблема, ще изчисли наложителността и ще позиционира сигнала на картата.
+                  </p>
+                </div>
               </div>
-              <div className="space-y-1">
-                <h4 className="font-bold text-white text-base">Очаква се снимка и описание</h4>
-                <p className="text-xs max-w-sm mx-auto text-slate-400 leading-relaxed">
-                  След като заредите снимка и натиснете бутона за анализ, Gemini AI ще разпознае проблема, ще определи наложителността и ще състави предварителен план за действие.
-                </p>
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
-      </div>
       </div>
     </div>
   );

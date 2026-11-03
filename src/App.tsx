@@ -785,6 +785,9 @@ export default function App() {
               selectedReportId={selectedReportId}
               onSelectReport={(id) => {
                 setSelectedReportId(id);
+              }}
+              onNavigateToReportList={(id) => {
+                setSelectedReportId(id);
                 setActiveTab('reports');
               }}
               onMapClickNewSignal={handleMapClickNewSignal}
