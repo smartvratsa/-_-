@@ -130,6 +130,21 @@ export function sanitizeReport(raw: any): ReportItem {
     authorId: raw.authorId,
     municipalNotes: raw.municipalNotes,
     assignedDepartment: raw.assignedDepartment,
+    claimedBy: raw.claimedBy ? {
+      uid: String(raw.claimedBy.uid),
+      name: String(raw.claimedBy.name),
+      claimedAt: Number(raw.claimedBy.claimedAt || Date.now()),
+      isPrivate: Boolean(raw.claimedBy.isPrivate),
+      inviteCode: raw.claimedBy.inviteCode ? String(raw.claimedBy.inviteCode) : undefined,
+    } : undefined,
+    taskStartedAt: typeof raw.taskStartedAt === 'number' ? raw.taskStartedAt : (raw.claimedBy ? Number(raw.claimedBy.claimedAt || Date.now()) : undefined),
+    minimumRequiredMinutes: typeof raw.minimumRequiredMinutes === 'number'
+      ? raw.minimumRequiredMinutes
+      : (rawAnalysis.path === 'blue' ? 3 : rawAnalysis.path === 'yellow' ? 6 : 10),
+    maxTeamSize: typeof raw.maxTeamSize === 'number'
+      ? raw.maxTeamSize
+      : (rawAnalysis.plan?.people && rawAnalysis.plan.people > 1 ? rawAnalysis.plan.people : 3),
+    teamMembers: Array.isArray(raw.teamMembers) ? raw.teamMembers : [],
     resolvedImageUrl: raw.resolvedImageUrl,
     resolvedAt: raw.resolvedAt,
     resolvedByVolunteer: raw.resolvedByVolunteer,
@@ -382,6 +397,7 @@ export async function fetchAllUsersFromFirestore(): Promise<VolunteerProfile[]> 
         totalPoints: typeof data.totalPoints === 'number' ? data.totalPoints : 0,
         resolvedTasksCount: typeof data.resolvedTasksCount === 'number' ? data.resolvedTasksCount : 0,
         activeAssignments: Array.isArray(data.activeAssignments) ? data.activeAssignments : [],
+        activeClaimedTaskId: data.activeClaimedTaskId || undefined,
         rank: data.rank || 'Новак доброволец',
         skills: data.skills,
         preferredCategories: Array.isArray(data.preferredCategories) ? data.preferredCategories : [],
@@ -520,3 +536,43 @@ export async function checkAndAutoResetWeeklyLeaderboard(): Promise<boolean> {
   await resetWeeklyPointsForAllUsersInFirestore();
   return true;
 }
+
+// Admin function: Update or reset points for a specific volunteer
+export async function updateUserPointsInFirestore(
+  userId: string,
+  updates: {
+    weeklyPoints?: number;
+    totalPoints?: number;
+    resolvedTasksCount?: number;
+    rank?: VolunteerRank;
+  }
+): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    const cleanUpdates: Record<string, any> = {};
+    if (typeof updates.weeklyPoints === 'number') cleanUpdates.weeklyPoints = Math.max(0, updates.weeklyPoints);
+    if (typeof updates.totalPoints === 'number') cleanUpdates.totalPoints = Math.max(0, updates.totalPoints);
+    if (typeof updates.resolvedTasksCount === 'number') cleanUpdates.resolvedTasksCount = Math.max(0, updates.resolvedTasksCount);
+    if (updates.rank) cleanUpdates.rank = updates.rank;
+
+    await updateDoc(doc(db, 'users', userId), cleanUpdates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+// Update activeClaimedTaskId for a volunteer profile
+export async function updateUserActiveClaimedTaskInFirestore(
+  userId: string,
+  taskId: string | null
+): Promise<void> {
+  const path = `users/${userId}`;
+  try {
+    await updateDoc(doc(db, 'users', userId), {
+      activeClaimedTaskId: taskId || null
+    });
+  } catch (error) {
+    console.warn(`Could not update activeClaimedTaskId for ${userId}:`, error);
+  }
+}
+

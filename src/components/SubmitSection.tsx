@@ -23,7 +23,10 @@ import {
   Award,
   ArrowUp,
   Navigation,
-  Image as ImageIcon
+  Image as ImageIcon,
+  UserCheck,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 
 interface SubmitSectionProps {
@@ -99,6 +102,8 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
   const [isGpsDetected, setIsGpsDetected] = useState<boolean>(false);
   const [gpsStatusText, setGpsStatusText] = useState<string>('Търсене на локация...');
   const [showScrollTopBtn, setShowScrollTopBtn] = useState<boolean>(false);
+  const [autoClaimTask, setAutoClaimTask] = useState<boolean>(false);
+  const [showDemoPresets, setShowDemoPresets] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -353,6 +358,12 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
     else if (activeLocation.includes('Медковец')) neighborhood = 'ж.к. Медковец';
 
     const authorDisplayName = currentVolunteer ? currentVolunteer.name : 'Гражданин на Враца';
+    const isAutoClaimed = Boolean(
+      autoClaimTask && currentVolunteer && !currentVolunteer.activeClaimedTaskId
+    );
+
+    const minMinutes = activeAnalysis.path === 'blue' ? 3 : activeAnalysis.path === 'yellow' ? 6 : 10;
+    const teamSize = activeAnalysis.plan?.people || 3;
 
     const newReport: ReportItem = {
       id: `sig-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -365,9 +376,21 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
       imageUrl: imagePreview || 'https://images.unsplash.com/photo-1541123437800-1bb1317badc2?auto=format&fit=crop&w=800&q=80',
       createdAt: 'Току-що',
       analysis: activeAnalysis,
-      status: activeAnalysis.path === 'blue' ? 'одобрен' : 'нови',
-      volunteersCount: 0,
-      volunteers: [],
+      status: isAutoClaimed ? 'в_изпълнение' : (activeAnalysis.path === 'blue' ? 'одобрен' : 'нови'),
+      volunteersCount: isAutoClaimed ? 1 : 0,
+      volunteers: isAutoClaimed ? [authorDisplayName] : [],
+      claimedBy: isAutoClaimed ? {
+        uid: currentVolunteer!.id,
+        name: currentVolunteer!.name,
+        claimedAt: Date.now(),
+        isPrivate: false
+      } : undefined,
+      taskStartedAt: isAutoClaimed ? Date.now() : undefined,
+      minimumRequiredMinutes: minMinutes,
+      maxTeamSize: teamSize,
+      teamMembers: isAutoClaimed ? [
+        { uid: currentVolunteer!.id, name: currentVolunteer!.name, joinedAt: Date.now() }
+      ] : [],
       blurPersonalData: activeAnalysis.contains_personal_data,
       authorName: authorDisplayName,
       authorId: currentVolunteer?.id,
@@ -375,8 +398,10 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
         {
           timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           actor: authorDisplayName,
-          action: `Подаден сигнал (${ticketNum}) на картата на Враца (+50 т.)`,
-          badge: '+50 т.'
+          action: isAutoClaimed
+            ? `Подаден сигнал (${ticketNum}) и поет веднага от ${authorDisplayName} за изпълнение (+50 т.)`
+            : `Подаден сигнал (${ticketNum}) на картата на Враца (+50 т.)`,
+          badge: isAutoClaimed ? 'Поета задача' : '+50 т.'
         },
         {
           timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -443,47 +468,56 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
           </p>
         </div>
 
-        {/* Quick Scenario Tester Presets with Active Highlight */}
-        <div className="mt-5 pt-4 border-t border-slate-800/80">
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="text-xs font-bold text-slate-300 block">
-              Тествай бърз примерен сигнал за Враца:
-            </span>
+        {/* Quick Scenario Tester Presets (Collapsible Demo Helper) */}
+        <div className="mt-4 pt-3 border-t border-slate-800/80">
+          <div className="flex items-center justify-between">
             <button
               type="button"
-              onClick={() => formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className="text-[11px] text-emerald-400 font-semibold hover:underline flex items-center gap-1 sm:hidden"
+              onClick={() => setShowDemoPresets(!showDemoPresets)}
+              className="text-xs font-semibold text-slate-400 hover:text-emerald-300 flex items-center gap-1.5 transition cursor-pointer"
             >
-              <span>Към формата</span>
-              <ArrowRight className="w-3 h-3" />
+              <span>{showDemoPresets ? 'Скрий тестови примерни сигнали' : '⚙️ Тестови примерни сигнали за Враца (Демо)'}</span>
+              {showDemoPresets ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
+            {showDemoPresets && (
+              <button
+                type="button"
+                onClick={() => formSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className="text-[11px] text-emerald-400 font-semibold hover:underline flex items-center gap-1 sm:hidden cursor-pointer"
+              >
+                <span>Към формата</span>
+                <ArrowRight className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-            {SAMPLE_PHOTO_PRESETS.map((preset, idx) => {
-              const isSelected = activePresetName === preset.name;
-              return (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => selectPreset(preset)}
-                  className={`text-xs p-2.5 rounded-xl transition-all flex items-center gap-2 font-semibold cursor-pointer text-left ${
-                    isSelected
-                      ? 'bg-emerald-600 text-white border-2 border-emerald-400 shadow-lg shadow-emerald-950 ring-2 ring-emerald-400/50 scale-[1.02]'
-                      : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-emerald-500/50'
-                  }`}
-                  title={`Зареди: ${preset.name}`}
-                >
-                  <span className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 text-xs font-bold ${
-                    isSelected ? 'bg-white text-emerald-800' : 'bg-slate-700 text-slate-300'
-                  }`}>
-                    {isSelected ? '✓' : idx + 1}
-                  </span>
-                  <span className="truncate flex-1">{preset.name}</span>
-                </button>
-              );
-            })}
-          </div>
+          {showDemoPresets && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-3 animate-fadeIn">
+              {SAMPLE_PHOTO_PRESETS.map((preset, idx) => {
+                const isSelected = activePresetName === preset.name;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => selectPreset(preset)}
+                    className={`text-xs p-2.5 rounded-xl transition-all flex items-center gap-2 font-semibold cursor-pointer text-left ${
+                      isSelected
+                        ? 'bg-emerald-600 text-white border-2 border-emerald-400 shadow-lg shadow-emerald-950 ring-2 ring-emerald-400/50 scale-[1.02]'
+                        : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-emerald-500/50'
+                    }`}
+                    title={`Зареди: ${preset.name}`}
+                  >
+                    <span className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 text-xs font-bold ${
+                      isSelected ? 'bg-white text-emerald-800' : 'bg-slate-700 text-slate-300'
+                    }`}>
+                      {isSelected ? '✓' : idx + 1}
+                    </span>
+                    <span className="truncate flex-1">{preset.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -741,6 +775,30 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
               <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-1 rounded-full text-xs font-mono font-black shrink-0">
                 +50 т.
               </span>
+            </div>
+
+            {/* Auto-Claim Task Option (User Request) */}
+            <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-1.5">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoClaimTask}
+                  disabled={Boolean(currentVolunteer?.activeClaimedTaskId)}
+                  onChange={(e) => setAutoClaimTask(e.target.checked)}
+                  className="mt-0.5 rounded text-emerald-500 focus:ring-emerald-500 cursor-pointer"
+                />
+                <div className="flex-1">
+                  <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <UserCheck className="w-4 h-4 text-emerald-400" />
+                    Поеми задачата веднага след качване (Аз ще я изпълня лично или с екип)
+                  </span>
+                  <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                    {currentVolunteer?.activeClaimedTaskId
+                      ? '⚠️ Вече имате активна поета задача като ръководител. Завършете я, преди да поемете нова.'
+                      : 'Автоматично ще станете ръководител на задачата, статусът ще стане „В изпълнение“ и ще можете да поканите доброволци.'}
+                  </p>
+                </div>
+              </label>
             </div>
 
             {/* Actions: AI Analysis or Direct 1-Click Submission */}
