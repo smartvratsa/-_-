@@ -362,7 +362,7 @@ export const SubmitSection: React.FC<SubmitSectionProps> = ({
       autoClaimTask && currentVolunteer && !currentVolunteer.activeClaimedTaskId
     );
 
-    const minMinutes = activeAnalysis.path === 'blue' ? 3 : activeAnalysis.path === 'yellow' ? 6 : 10;
+    const minMinutes = 10;
     const teamSize = activeAnalysis.plan?.people || 3;
 
     const newReport: ReportItem = {

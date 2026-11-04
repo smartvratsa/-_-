@@ -140,7 +140,7 @@ export function sanitizeReport(raw: any): ReportItem {
     taskStartedAt: typeof raw.taskStartedAt === 'number' ? raw.taskStartedAt : (raw.claimedBy ? Number(raw.claimedBy.claimedAt || Date.now()) : undefined),
     minimumRequiredMinutes: typeof raw.minimumRequiredMinutes === 'number'
       ? raw.minimumRequiredMinutes
-      : (rawAnalysis.path === 'blue' ? 3 : rawAnalysis.path === 'yellow' ? 6 : 10),
+      : 10,
     maxTeamSize: typeof raw.maxTeamSize === 'number'
       ? raw.maxTeamSize
       : (rawAnalysis.plan?.people && rawAnalysis.plan.people > 1 ? rawAnalysis.plan.people : 3),

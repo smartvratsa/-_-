@@ -41,8 +41,8 @@ export const ResolutionModal: React.FC<ResolutionModalProps> = ({
   const [verificationResult, setVerificationResult] = useState<ResolutionVerification | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Anti-cheat AI Minimum working time timer
-  const minRequiredMinutes = report.minimumRequiredMinutes || (report.analysis?.path === 'blue' ? 3 : report.analysis?.path === 'yellow' ? 6 : 10);
+  // Anti-cheat AI Minimum working time timer: 10 minutes required before answering
+  const minRequiredMinutes = report.minimumRequiredMinutes || 10;
   const taskStartTime = report.taskStartedAt || (report.claimedBy?.claimedAt) || Date.now();
 
   const calculateRemainingSeconds = () => {
@@ -108,7 +108,7 @@ export const ResolutionModal: React.FC<ResolutionModalProps> = ({
 
   const handleVerify = async () => {
     if (isTimerActive) {
-      setErrorMsg(`AI защита: Моля изчакайте минималното технологично време (${minRequiredMinutes} мин.), преди да предадете задачата.`);
+      setErrorMsg(`AI защита: Можете да отговорите на сигнала 10 минути след поемането му. Моля изчакайте още ${Math.floor(remainingSeconds / 60)} мин. и ${remainingSeconds % 60} сек.`);
       return;
     }
 
@@ -240,13 +240,13 @@ export const ResolutionModal: React.FC<ResolutionModalProps> = ({
               <Timer className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-pulse" />
               <div className="space-y-1">
                 <span className="font-bold text-white block">
-                  AI Защита срещу преждевременно предаване (Anti-Cheat):
+                  AI Защита: Отговор на сигнала след 10 минути
                 </span>
                 <p className="text-amber-300/90 leading-relaxed text-[11px] sm:text-xs">
-                  Изкуственият интелект е пресметнал, че за този тип дейност (<strong>{report.analysis?.category || 'Ремонт'}</strong>) е необходимо технологично време от минимум <strong>{minRequiredMinutes} минути</strong> за реален ремонт.
+                  За да се гарантира реално изпълнение на дейностите, отговор и снимков отчет за сигнал могат да се предадат <strong>10 минути</strong> след поемането му.
                 </p>
                 <div className="flex items-center gap-2 pt-1 font-mono text-xs sm:text-sm text-amber-400 font-extrabold">
-                  <span>Оставащо време до възможност за предаване:</span>
+                  <span>Оставащо време до възможност за отговор:</span>
                   <span className="bg-slate-950 px-2.5 py-1 rounded-lg border border-amber-500/40 text-amber-300">
                     {Math.floor(remainingSeconds / 60)} мин. {remainingSeconds % 60 < 10 ? '0' : ''}{remainingSeconds % 60} сек.
                   </span>
@@ -426,13 +426,13 @@ export const ResolutionModal: React.FC<ResolutionModalProps> = ({
                   <>
                     <Timer className="w-4 h-4 text-amber-300 animate-pulse" />
                     <span>
-                      Изчакайте AI таймера ({Math.floor(remainingSeconds / 60)}:{remainingSeconds % 60 < 10 ? '0' : ''}{remainingSeconds % 60})
+                      Изчакайте 10 мин. преди отговор ({Math.floor(remainingSeconds / 60)}:{remainingSeconds % 60 < 10 ? '0' : ''}{remainingSeconds % 60})
                     </span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4 text-emerald-200" />
-                    <span>AI Верификация & Точкуване</span>
+                    <span>Отговори на сигнала & Точкуване</span>
                   </>
                 )}
               </button>

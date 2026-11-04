@@ -30,7 +30,8 @@ import {
   X,
   Lock,
   Unlock,
-  Check
+  Check,
+  LogOut
 } from 'lucide-react';
 
 interface ReportListSectionProps {
@@ -40,7 +41,7 @@ interface ReportListSectionProps {
   onApproveByOfficial: (reportId: string, notes: string) => void;
   onAssignDepartment: (reportId: string, dept: string) => void;
   onSelectCase: (code: string) => void;
-  onOpenResolutionModal?: (report: ReportItem) => void;
+  onOpenResolutionModal?: (reportItem: ReportItem) => void;
   onShowOnMap?: (report: ReportItem) => void;
   isAdmin?: boolean;
   onDeleteReport?: (reportId: string) => void;
@@ -52,10 +53,10 @@ interface ReportListSectionProps {
   onReleaseTask?: (reportId: string) => void;
 }
 
-// Live timer component for active claimed tasks
+// Live timer component for active claimed tasks (minimum 10 minutes wait time before answer)
 const LiveTaskCountdown: React.FC<{ startedAt?: number; requiredMinutes?: number }> = ({
   startedAt,
-  requiredMinutes = 5
+  requiredMinutes = 10
 }) => {
   const [secondsLeft, setSecondsLeft] = useState<number>(() => {
     if (!startedAt) return requiredMinutes * 60;
@@ -75,9 +76,12 @@ const LiveTaskCountdown: React.FC<{ startedAt?: number; requiredMinutes?: number
 
   if (secondsLeft <= 0) {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-lg">
+      <span
+        className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-lg"
+        title="10-те минути изтекоха, можете да отговорите на сигнала с доказателство"
+      >
         <Check className="w-3 h-3 text-emerald-400" />
-        <span>AI време: Изпълнено</span>
+        <span>10 мин. изтекоха · Може да отговорите</span>
       </span>
     );
   }
@@ -86,9 +90,12 @@ const LiveTaskCountdown: React.FC<{ startedAt?: number; requiredMinutes?: number
   const secs = secondsLeft % 60;
 
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] font-mono text-amber-300 font-bold bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded-lg">
+    <span
+      className="inline-flex items-center gap-1 text-[11px] font-mono text-amber-300 font-bold bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded-lg"
+      title="Минимално време от поемането: 10 минути преди предаване на отговор"
+    >
       <Timer className="w-3 h-3 text-amber-400 animate-pulse" />
-      <span>AI таймер: {mins}:{secs < 10 ? '0' : ''}{secs}</span>
+      <span>Отговор след: {mins}:{secs < 10 ? '0' : ''}{secs}</span>
     </span>
   );
 };
@@ -131,6 +138,9 @@ export const ReportListSection: React.FC<ReportListSectionProps> = ({
 
   // Alert message for 1-task limit
   const [taskLimitNotice, setTaskLimitNotice] = useState<string | null>(null);
+
+  // Leave Task confirmation modal state
+  const [reportToLeave, setReportToLeave] = useState<ReportItem | null>(null);
 
   // Auto-expand and scroll to focused report from map or notification
   useEffect(() => {
@@ -545,31 +555,32 @@ export const ReportListSection: React.FC<ReportListSectionProps> = ({
                             /* Case B: Task is already claimed by someone */
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {isParticipant ? (
-                                /* Current user is the Leader or Member -> Can Finish with Proof */
-                                <div className="flex items-center gap-2">
+                                /* Current user is the Leader or Member -> Can Answer or Leave */
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <LiveTaskCountdown
                                     startedAt={report.taskStartedAt}
-                                    requiredMinutes={report.minimumRequiredMinutes || 5}
+                                    requiredMinutes={report.minimumRequiredMinutes || 10}
                                   />
                                   <button
                                     type="button"
                                     onClick={() => onOpenResolutionModal?.(report)}
                                     className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 shadow-md shadow-emerald-950 transition-colors cursor-pointer"
-                                    title="Завърши задачата и качи снимково доказателство"
+                                    title="Отговори на сигнала и качи снимково доказателство за свършена работа"
                                   >
                                     <Camera className="w-3.5 h-3.5" />
-                                    <span>Завърши & Докладвай</span>
+                                    <span>Отговори на сигнала</span>
                                   </button>
 
-                                  {/* Leader can release task if needed */}
-                                  {isLead && onReleaseTask && (
+                                  {/* Option to leave / drop task: both for leader & team members */}
+                                  {onReleaseTask && (
                                     <button
                                       type="button"
-                                      onClick={() => onReleaseTask(report.id)}
-                                      className="text-[11px] text-slate-400 hover:text-red-300 px-1.5 py-1"
-                                      title="Освободи задачата, за да може друг доброволец да я поеме"
+                                      onClick={() => setReportToLeave(report)}
+                                      className="bg-slate-800 hover:bg-red-950/70 text-slate-300 hover:text-red-300 border border-slate-700 hover:border-red-500/50 text-xs px-2.5 py-1.5 rounded-lg font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                                      title="Остави сигнала, за да се освободи задачата за други доброволци и профилът ви да може да поеме нов сигнал"
                                     >
-                                      Освободи
+                                      <LogOut className="w-3.5 h-3.5" />
+                                      <span>Остави сигнала</span>
                                     </button>
                                   )}
                                 </div>
@@ -966,6 +977,70 @@ export const ReportListSection: React.FC<ReportListSectionProps> = ({
               >
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>Присъедини се</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Leave / Drop Task Confirmation Modal */}
+      {reportToLeave && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-sm w-full p-5 sm:p-6 shadow-2xl space-y-4 animate-scaleIn">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <LogOut className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Оставяне на сигнал</h3>
+                  <p className="text-[11px] text-slate-400 font-mono">#{reportToLeave.ticketNumber || reportToLeave.id.slice(0, 8)}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReportToLeave(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg text-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <p>
+                Сигурни ли сте, че искате да оставите сигнала <strong className="text-white">„{reportToLeave.title}“</strong>?
+              </p>
+              <div className="bg-amber-950/30 border border-amber-500/30 rounded-xl p-3 text-[11px] text-amber-200 space-y-1.5">
+                <p className="font-semibold flex items-center gap-1.5 text-amber-300">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  Какво ще стане:
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-slate-300">
+                  <li>Сигналът се връща в общия списък и друг доброволец ще може да го поеме.</li>
+                  <li>Профилът ви се освобождава незабавно и ще можете да поемете нова задача.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setReportToLeave(null)}
+                className="px-4 py-2 text-xs text-slate-400 hover:text-white cursor-pointer font-medium"
+              >
+                Отказ
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = reportToLeave.id;
+                  setReportToLeave(null);
+                  onReleaseTask?.(id);
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-red-950/50 flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Да, остави сигнала</span>
               </button>
             </div>
           </div>

@@ -571,8 +571,8 @@ export default function App() {
     }
 
     const now = Date.now();
+    const minMinutes = 10;
     const targetReport = reports.find((r) => r.id === reportId);
-    const minMinutes = targetReport?.minimumRequiredMinutes || (targetReport?.analysis?.path === 'blue' ? 3 : 5);
     const maxTeam = targetReport?.maxTeamSize || targetReport?.analysis?.plan?.people || 3;
 
     const claimedPayload = {
@@ -604,8 +604,8 @@ export default function App() {
                 timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 actor: currentVolunteer.name,
                 action: isPrivate
-                  ? `Пое задачата като ръководител (с код за достъп). Стартира AI таймер за минимум ${minMinutes} мин.`
-                  : `Пое задачата като ръководител (отворен екип). Стартира AI таймер за минимум ${minMinutes} мин.`,
+                  ? `Пое задачата като ръководител (с код за достъп). Отговорът ще е възможен след 10 мин.`
+                  : `Пое задачата като ръководител (отворен екип). Отговорът ще е възможен след 10 мин.`,
                 badge: 'Поета задача'
               }
             ]
@@ -637,7 +637,7 @@ export default function App() {
       teamMembers: teamPayload
     }).catch((e) => console.warn('Could not claim task in Firestore:', e));
 
-    showToast(`Успешно поехте задачата! AI таймерът стартира (${minMinutes} мин. мин. време). ⏱️`);
+    showToast('Успешно поехте задачата! След 10 минути ще можете да отговорите на сигнала. ⏱️');
   };
 
   // Join Task as Team Member (No 1-task limit on joining!)
@@ -714,26 +714,40 @@ export default function App() {
     showToast(`Присъединихте се към екипа на „${targetReport.title}“! 👥`);
   };
 
-  // Release Task (Leader steps down)
+  // Leave / Release Task (Leader releases task or team member leaves team)
   const handleReleaseTask = (reportId: string) => {
-    setReports((prev) =>
-      prev.map((r) => {
-        if (r.id === reportId) {
-          return {
-            ...r,
-            status: 'одобрен',
-            claimedBy: undefined,
-            taskStartedAt: undefined,
-            teamMembers: [],
-            volunteersCount: 0,
-            volunteers: []
-          };
-        }
-        return r;
-      })
-    );
+    const targetReport = reports.find((r) => r.id === reportId);
+    if (!targetReport || !currentVolunteer) return;
 
-    if (currentVolunteer && currentVolunteer.activeClaimedTaskId === reportId) {
+    const isLeader = targetReport.claimedBy?.uid === currentVolunteer.id;
+
+    if (isLeader) {
+      // Leader drops the task -> reset task so other volunteers can claim it
+      setReports((prev) =>
+        prev.map((r) => {
+          if (r.id === reportId) {
+            return {
+              ...r,
+              status: 'одобрен',
+              claimedBy: undefined,
+              taskStartedAt: undefined,
+              teamMembers: [],
+              volunteersCount: 0,
+              volunteers: [],
+              historyLog: [
+                ...r.historyLog,
+                {
+                  timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  actor: currentVolunteer.name,
+                  action: 'Остави сигнала и освободи задачата за други граждани.'
+                }
+              ]
+            };
+          }
+          return r;
+        })
+      );
+
       const updatedVolunteer: VolunteerProfile = {
         ...currentVolunteer,
         activeClaimedTaskId: undefined,
@@ -742,18 +756,59 @@ export default function App() {
       setCurrentVolunteer(updatedVolunteer);
       saveUserProfileToFirestore(updatedVolunteer).catch(() => {});
       updateUserActiveClaimedTaskInFirestore(currentVolunteer.id, null).catch(() => {});
+
+      updateReportInFirestore(reportId, {
+        status: 'одобрен',
+        claimedBy: undefined,
+        taskStartedAt: undefined,
+        teamMembers: [],
+        volunteersCount: 0,
+        volunteers: []
+      }).catch(() => {});
+
+      showToast('Успешно оставихте сигнала! Вече можете да поемете друг сигнал.');
+    } else {
+      // Team member leaves
+      const updatedTeam = (targetReport.teamMembers || []).filter((m) => m.uid !== currentVolunteer.id);
+      const updatedVolunteers = targetReport.volunteers.filter((v) => v !== currentVolunteer.name);
+
+      setReports((prev) =>
+        prev.map((r) => {
+          if (r.id === reportId) {
+            return {
+              ...r,
+              teamMembers: updatedTeam,
+              volunteers: updatedVolunteers,
+              volunteersCount: updatedTeam.length,
+              historyLog: [
+                ...r.historyLog,
+                {
+                  timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  actor: currentVolunteer.name,
+                  action: 'Напусна екипа на сигнала.'
+                }
+              ]
+            };
+          }
+          return r;
+        })
+      );
+
+      const updatedVolunteer: VolunteerProfile = {
+        ...currentVolunteer,
+        activeAssignments: currentVolunteer.activeAssignments.filter((id) => id !== reportId)
+      };
+      setCurrentVolunteer(updatedVolunteer);
+      saveUserProfileToFirestore(updatedVolunteer).catch(() => {});
+
+      updateReportInFirestore(reportId, {
+        teamMembers: updatedTeam,
+        volunteers: updatedVolunteers,
+        volunteersCount: updatedTeam.length
+      }).catch(() => {});
+
+      showToast('Успешно напуснахте екипа на този сигнал.');
     }
-
-    updateReportInFirestore(reportId, {
-      status: 'одобрен',
-      claimedBy: undefined,
-      taskStartedAt: undefined,
-      teamMembers: [],
-      volunteersCount: 0,
-      volunteers: []
-    }).catch(() => {});
-
-    showToast('Задачата беше освободена и е отново налична за поемане.');
   };
 
   // Resolution photo success handler with Team Synergy Bonus & multi-member points distribution
@@ -1111,6 +1166,7 @@ export default function App() {
                   onResolveReport={(report) => setResolutionReport(report)}
                   onNavigateToMap={() => setActiveTab('map')}
                   onNavigateToGuide={() => setActiveTab('guide')}
+                  onLeaveTask={handleReleaseTask}
                 />
               </div>
             )

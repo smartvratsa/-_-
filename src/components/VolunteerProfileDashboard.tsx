@@ -41,6 +41,7 @@ interface VolunteerProfileDashboardProps {
   onResolveReport: (report: ReportItem) => void;
   onNavigateToMap: () => void;
   onNavigateToGuide?: () => void;
+  onLeaveTask?: (reportId: string) => void;
 }
 
 const RANK_THRESHOLDS: { rank: VolunteerRank; minPoints: number; badgeColor: string; icon: string }[] = [
@@ -59,7 +60,8 @@ export const VolunteerProfileDashboard: React.FC<VolunteerProfileDashboardProps>
   onDeleteAccount,
   onResolveReport,
   onNavigateToMap,
-  onNavigateToGuide
+  onNavigateToGuide,
+  onLeaveTask
 }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -73,6 +75,7 @@ export const VolunteerProfileDashboard: React.FC<VolunteerProfileDashboardProps>
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [reportToLeave, setReportToLeave] = useState<ReportItem | null>(null);
 
   const handleDashboardPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -660,13 +663,27 @@ export const VolunteerProfileDashboard: React.FC<VolunteerProfileDashboardProps>
                       {report.createdAt}
                     </span>
 
-                    <button
-                      onClick={() => onResolveReport(report)}
-                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center gap-1.5 transition text-xs shadow-md shadow-emerald-950 cursor-pointer"
-                    >
-                      <Camera className="w-3.5 h-3.5" />
-                      <span>Приключи и качи снимка</span>
-                    </button>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {onLeaveTask && (
+                        <button
+                          type="button"
+                          onClick={() => setReportToLeave(report)}
+                          className="px-3 py-1.5 bg-slate-800 hover:bg-red-950/80 text-slate-300 hover:text-red-200 border border-slate-700 hover:border-red-500/50 rounded-xl font-bold flex items-center gap-1.5 transition text-xs cursor-pointer"
+                          title="Остави този сигнал"
+                        >
+                          <LogOut className="w-3.5 h-3.5 text-red-400" />
+                          <span>Остави сигнала</span>
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => onResolveReport(report)}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold flex items-center gap-1.5 transition text-xs shadow-md shadow-emerald-950 cursor-pointer"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>Отговори на сигнала</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -783,6 +800,70 @@ export const VolunteerProfileDashboard: React.FC<VolunteerProfileDashboardProps>
           </div>
         </div>
       </div>
+
+      {/* Leave Task Confirmation Modal */}
+      {reportToLeave && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-sm w-full p-5 sm:p-6 shadow-2xl space-y-4 animate-scaleIn">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <LogOut className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Оставяне на сигнал</h3>
+                  <p className="text-[11px] text-slate-400 font-mono">#{reportToLeave.ticketNumber || reportToLeave.id.slice(0, 8)}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReportToLeave(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg text-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <p>
+                Сигурни ли сте, че искате да оставите сигнала <strong className="text-white">„{reportToLeave.title}“</strong>?
+              </p>
+              <div className="bg-amber-950/30 border border-amber-500/30 rounded-xl p-3 text-[11px] text-amber-200 space-y-1.5">
+                <p className="font-semibold flex items-center gap-1.5 text-amber-300">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  Какво ще стане:
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-slate-300">
+                  <li>Сигналът се връща в общия списък и друг доброволец ще може да го поеме.</li>
+                  <li>Профилът ви се освобождава незабавно и ще можете да поемете нова задача.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setReportToLeave(null)}
+                className="px-4 py-2 text-xs text-slate-400 hover:text-white cursor-pointer font-medium"
+              >
+                Отказ
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = reportToLeave.id;
+                  setReportToLeave(null);
+                  onLeaveTask?.(id);
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-red-950/50 flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Да, остави сигнала</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Account Settings & Multi-Provider Linking Modal */}
       <AccountSettingsModal
