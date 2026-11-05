@@ -1,12 +1,4 @@
-// Source: Google Maps Platform Code Assist
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  APIProvider,
-  Map,
-  AdvancedMarker,
-  Pin,
-  useMap
-} from '@vis.gl/react-google-maps';
 import { ReportItem } from '../types';
 import { VRATSA_DISTRICTS } from '../data/mockReports';
 import {
@@ -48,39 +40,14 @@ interface VratsaInteractiveMapProps {
   currentVolunteerName?: string;
 }
 
-const VRATSA_MAP_RESTRICTION = {
-  latLngBounds: {
-    north: 43.2500,
-    south: 43.1600,
-    west: 23.4700,
-    east: 23.6300
-  },
-  strictBounds: false
-};
+export type MapLayerType = 'roadmap' | 'satellite' | 'dark' | 'terrain';
 
-const MapCameraController: React.FC<{
-  targetDistrict: typeof VRATSA_DISTRICTS[0] | null;
-  userCoords: { lat: number; lng: number } | null;
-}> = ({ targetDistrict, userCoords }) => {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!map) return;
-    if (userCoords) {
-      map.panTo(userCoords);
-      map.setZoom(15.5);
-    } else if (targetDistrict) {
-      if (targetDistrict.id === 'all') {
-        map.panTo({ lat: 43.2047, lng: 23.5477 });
-        map.setZoom(13.5);
-      } else {
-        map.panTo({ lat: targetDistrict.lat, lng: targetDistrict.lng });
-        map.setZoom(targetDistrict.zoom);
-      }
-    }
-  }, [map, targetDistrict, userCoords]);
-
-  return null;
+// Geographic bounds for Vratsa
+const BOUNDS = {
+  north: 43.2500,
+  south: 43.1600,
+  west: 23.4700,
+  east: 23.6300
 };
 
 export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
@@ -98,26 +65,31 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   
+  const [activeLayer, setActiveLayer] = useState<MapLayerType>('dark');
+  const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showHotspots, setShowHotspots] = useState(false);
 
+  // Map Zoom & Pan state
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
   // Pin Drop Mode
   const [isPinModeActive, setIsPinModeActive] = useState(false);
   const [activePopupReport, setActivePopupReport] = useState<ReportItem | null>(null);
-  const [droppedPinCoords, setDroppedPinCoords] = useState<{ lat: number; lng: number; districtName?: string } | null>(null);
+  const [droppedPinCoords, setDroppedPinCoords] = useState<{ lat: number; lng: number; districtName?: string; x?: number; y?: number } | null>(null);
 
   // User live geolocation
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number; x: number; y: number } | null>(null);
   const [isLocating, setIsLocating] = useState(false);
   const [locationToast, setLocationToast] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
-
-  // Google Maps Platform API key with reliable fallback
-  const rawApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || 'AIzaSyDjvs9fT28lbWyra0yEzOH9JfcOokS7J2I';
-  const apiKey = rawApiKey.trim();
+  const layerMenuRef = useRef<HTMLDivElement>(null);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -125,6 +97,9 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
       const target = event.target as Node;
       if (filterMenuRef.current && !filterMenuRef.current.contains(target)) {
         setIsFilterMenuOpen(false);
+      }
+      if (layerMenuRef.current && !layerMenuRef.current.contains(target)) {
+        setIsLayerMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -137,6 +112,10 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
       const target = reports.find((r) => r.id === selectedReportId);
       if (target) {
         setActivePopupReport(target);
+        if (target.coordinates) {
+          const coords = latLngToPercent(target.coordinates.lat, target.coordinates.lng);
+          // center on target
+        }
       }
     }
   }, [selectedReportId, reports]);
@@ -160,6 +139,13 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     { id: 'решен', label: 'Решени проблеми', color: 'bg-emerald-500' },
     { id: 'в_изпълнение', label: 'В изпълнение', color: 'bg-amber-400' },
     { id: 'прегледан', label: 'Прегледани', color: 'bg-blue-400' }
+  ];
+
+  const LAYER_OPTIONS: { id: MapLayerType; label: string; icon: string; desc: string }[] = [
+    { id: 'dark', label: 'Нощен / Контрастен', icon: '🌙', desc: 'Тъмна тактическа карта с неонови пинове' },
+    { id: 'roadmap', label: 'Уличен план', icon: '🗺️', desc: 'Стандартна светла карта на града' },
+    { id: 'satellite', label: 'Сателитен изглед', icon: '🛰️', desc: 'Снимки с висока резолюция' },
+    { id: 'terrain', label: 'Релеф & Вратцата', icon: '🏔️', desc: 'Топографски изглед на Балкана' }
   ];
 
   const matchesCategory = (r: ReportItem, catId: string): boolean => {
@@ -224,9 +210,31 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     ).length;
   };
 
+  // Convert Lat/Lng to percentage (0% to 100%) within Vratsa bounds
+  const latLngToPercent = (lat: number, lng: number) => {
+    const x = ((lng - BOUNDS.west) / (BOUNDS.east - BOUNDS.west)) * 100;
+    // Invert Y because latitude goes north (top)
+    const y = ((BOUNDS.north - lat) / (BOUNDS.north - BOUNDS.south)) * 100;
+    return {
+      x: Math.max(5, Math.min(95, x)),
+      y: Math.max(5, Math.min(95, y))
+    };
+  };
+
   const handleSelectDistrict = (district: typeof VRATSA_DISTRICTS[0]) => {
     setActiveDistrictId(district.id);
     setTargetDistrict(district);
+    setZoomLevel(1.4);
+    if (district.id === 'all') {
+      setPanOffset({ x: 0, y: 0 });
+      setZoomLevel(1);
+    } else {
+      const pt = latLngToPercent(district.lat, district.lng);
+      setPanOffset({
+        x: (50 - pt.x) * 4,
+        y: (50 - pt.y) * 4
+      });
+    }
   };
 
   const handleResetAllFilters = () => {
@@ -236,6 +244,8 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     setFilterCategory('all');
     setFilterStatus('all');
     setIsFilterMenuOpen(false);
+    setZoomLevel(1);
+    setPanOffset({ x: 0, y: 0 });
   };
 
   const handleLocateMe = () => {
@@ -250,18 +260,23 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const coords = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        };
-        setUserLocation(coords);
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const pt = latLngToPercent(lat, lng);
+
+        setUserLocation({ lat, lng, x: pt.x, y: pt.y });
         setIsLocating(false);
+        setZoomLevel(1.6);
+        setPanOffset({
+          x: (50 - pt.x) * 5,
+          y: (50 - pt.y) * 5
+        });
 
         let nearest = 'Враца';
         let minDist = Infinity;
         VRATSA_DISTRICTS.forEach((d) => {
           if (d.id === 'all') return;
-          const dist = Math.hypot(d.lat - coords.lat, d.lng - coords.lng);
+          const dist = Math.hypot(d.lat - lat, d.lng - lng);
           if (dist < minDist) {
             minDist = dist;
             nearest = d.name;
@@ -281,7 +296,19 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     );
   };
 
-  const handleMapClick = (lat: number, lng: number) => {
+  // Click on interactive map canvas
+  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    const xPercent = (clickX / rect.width) * 100;
+    const yPercent = (clickY / rect.height) * 100;
+
+    // Convert percent back to lat/lng
+    const lng = BOUNDS.west + (xPercent / 100) * (BOUNDS.east - BOUNDS.west);
+    const lat = BOUNDS.north - (yPercent / 100) * (BOUNDS.north - BOUNDS.south);
+
     let nearestDistrict = 'Център';
     let minDistance = Infinity;
     VRATSA_DISTRICTS.forEach((d) => {
@@ -293,12 +320,9 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
       }
     });
 
-    setDroppedPinCoords({ lat, lng, districtName: nearestDistrict });
-  };
-
-  const handleGoogleMapClick = (e: any) => {
-    if (!e.detail?.latLng) return;
-    handleMapClick(e.detail.latLng.lat, e.detail.latLng.lng);
+    if (isPinModeActive) {
+      setDroppedPinCoords({ lat, lng, districtName: nearestDistrict, x: xPercent, y: yPercent });
+    }
   };
 
   const handleConfirmDroppedPin = () => {
@@ -315,6 +339,22 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
 
   const currentCategoryObj = CATEGORY_OPTIONS.find((c) => c.id === filterCategory) || CATEGORY_OPTIONS[0];
   const currentStatusObj = STATUS_OPTIONS.find((s) => s.id === filterStatus) || STATUS_OPTIONS[0];
+  const currentLayerObj = LAYER_OPTIONS.find((l) => l.id === activeLayer) || LAYER_OPTIONS[0];
+
+  // Layer background style
+  const getLayerBackgroundStyle = () => {
+    switch (activeLayer) {
+      case 'roadmap':
+        return 'bg-slate-100 text-slate-900';
+      case 'satellite':
+        return 'bg-emerald-950 text-white';
+      case 'terrain':
+        return 'bg-stone-900 text-stone-100';
+      case 'dark':
+      default:
+        return 'bg-slate-950 text-white';
+    }
+  };
 
   return (
     <div
@@ -360,6 +400,50 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap xl:flex-nowrap justify-end shrink-0">
+          {/* Layer Switcher */}
+          <div className="relative" ref={layerMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsLayerMenuOpen(!isLayerMenuOpen)}
+              className="px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 transition shadow-sm cursor-pointer"
+            >
+              <Layers className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{currentLayerObj.icon} {currentLayerObj.label}</span>
+              <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isLayerMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isLayerMenuOpen && (
+              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-2 z-50 space-y-1">
+                <div className="px-2.5 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                  Изглед на картата
+                </div>
+                {LAYER_OPTIONS.map((layer) => {
+                  const isSelected = activeLayer === layer.id;
+                  return (
+                    <button
+                      key={layer.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveLayer(layer.id);
+                        setIsLayerMenuOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs transition text-left cursor-pointer ${
+                        isSelected ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 font-bold' : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                      }`}
+                    >
+                      <span className="text-base">{layer.icon}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold">{layer.label}</div>
+                        <div className="text-[10px] text-slate-400 truncate">{layer.desc}</div>
+                      </div>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             onClick={() => setIsFilterMenuOpen(!isFilterMenuOpen)}
@@ -368,7 +452,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                 ? 'bg-amber-500/25 text-amber-200 border-amber-500/60 shadow-md'
                 : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border-slate-700'
             }`}
-            title="Отвори филтри (Категория, Статус, Квартал)"
           >
             <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400" />
             <span>Филтри</span>
@@ -388,7 +471,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                 ? 'bg-red-500/25 text-red-200 border-red-500/60 shadow-md shadow-red-950'
                 : 'bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-750 hover:text-white'
             }`}
-            title="Очертай критични зони и спешни аварии"
           >
             <Flame className={`w-3.5 h-3.5 ${showHotspots ? 'text-red-400 animate-pulse' : 'text-slate-400'}`} />
             <span className="hidden md:inline">Горещи зони</span>
@@ -399,7 +481,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             onClick={handleLocateMe}
             disabled={isLocating}
             className="px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-blue-600/90 hover:bg-blue-500 text-white border border-blue-400/40 shadow-sm transition cursor-pointer disabled:opacity-50"
-            title="Намери моето текущо местоположение в гр. Враца"
           >
             <Navigation className={`w-3.5 h-3.5 ${isLocating ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">Намери ме</span>
@@ -416,7 +497,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                 ? 'bg-emerald-600 text-white border-emerald-400 shadow-lg shadow-emerald-950 animate-pulse'
                 : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white'
             }`}
-            title="Кликнете на картата, за да посочите локация на проблем"
           >
             <Crosshair className="w-3.5 h-3.5" />
             <span className="hidden md:inline">{isPinModeActive ? 'Кликни на картата' : 'Постави пин с клик'}</span>
@@ -427,7 +507,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             type="button"
             onClick={() => setIsFullscreen(!isFullscreen)}
             className="p-1.5 rounded-xl text-slate-300 bg-slate-800 hover:bg-slate-700 hover:text-white border border-slate-700 transition cursor-pointer"
-            title={isFullscreen ? 'Изход от цял екран' : 'Карта на цял екран'}
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4 text-amber-400" /> : <Maximize2 className="w-4 h-4" />}
           </button>
@@ -666,11 +745,11 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
         </div>
       )}
 
-      {/* 3. GOOGLE MAPS CONTAINER */}
+      {/* 3. ROBUST INTERACTIVE VECTOR MAP CONTAINER */}
       <div
-        className={`relative rounded-2xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 transition-all ${
+        className={`relative rounded-2xl overflow-hidden border border-slate-800 shadow-2xl transition-all select-none ${
           isFullscreen ? 'flex-1 h-full min-h-[500px]' : 'h-[500px] lg:h-[580px]'
-        }`}
+        } ${getLayerBackgroundStyle()}`}
       >
         {locationToast && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-blue-900/95 text-white border border-blue-400/80 px-4 py-2 rounded-xl text-xs font-bold shadow-2xl backdrop-blur-md animate-bounce pointer-events-none flex items-center gap-2">
@@ -679,115 +758,163 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
           </div>
         )}
 
-        <APIProvider apiKey={apiKey} libraries={['marker']}>
-          <Map
-            style={{ width: '100%', height: '100%' }}
-            defaultCenter={{ lat: 43.2047, lng: 23.5477 }}
-            defaultZoom={13.5}
-            minZoom={12}
-            maxZoom={18}
-            restriction={VRATSA_MAP_RESTRICTION}
-            mapId="DEMO_MAP_ID"
-            internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
-            gestureHandling="cooperative"
-            streetViewControl={false}
-            mapTypeControl={true}
-            fullscreenControl={false}
-            onClick={handleGoogleMapClick}
-          >
-            <MapCameraController
-              targetDistrict={targetDistrict}
-              userCoords={userLocation}
-            />
+        {/* Map Interactive Canvas */}
+        <div
+          className="w-full h-full relative cursor-crosshair overflow-hidden"
+          onClick={handleCanvasClick}
+          style={{
+            transform: `scale(${zoomLevel}) translate(${panOffset.x}px, ${panOffset.y}px)`,
+            transformOrigin: 'center center',
+            transition: 'transform 0.3s ease-out'
+          }}
+        >
+          {/* Grid lines / Map Background pattern */}
+          <div className="absolute inset-0 opacity-15 bg-[radial-gradient(#34d399_1px,transparent_1px)] [background-size:24px_24px]" />
 
-            {/* User Live GPS Marker */}
-            {userLocation && (
-              <AdvancedMarker position={userLocation} title="Вашето местоположение">
-                <div className="relative flex items-center justify-center">
-                  <div className="w-8 h-8 rounded-full bg-blue-500/40 animate-ping absolute" />
-                  <div className="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-lg relative" />
+          {/* Vratsa City Map Graphics & Districts */}
+          <div className="absolute inset-8 flex items-center justify-center pointer-events-none opacity-20">
+            <div className="text-center space-y-2">
+              <div className="text-6xl font-black tracking-widest uppercase">ВРАЦА</div>
+              <div className="text-sm font-mono">Интерактивна градска карта на активните сигнали</div>
+            </div>
+          </div>
+
+          {/* District Pins / Labels on Map */}
+          {VRATSA_DISTRICTS.filter(d => d.id !== 'all').map((d) => {
+            const pt = latLngToPercent(d.lat, d.lng);
+            const isSelected = activeDistrictId === d.id;
+            return (
+              <div
+                key={d.id}
+                className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto transition-transform hover:scale-110 cursor-pointer"
+                style={{ left: `${pt.x}%`, top: `${pt.y}%` }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSelectDistrict(d);
+                }}
+              >
+                <div className={`px-2 py-1 rounded-lg text-[10px] font-bold shadow-md border flex items-center gap-1 ${
+                  isSelected ? 'bg-emerald-600 text-white border-emerald-400 scale-110' : 'bg-slate-950/90 text-slate-300 border-slate-700'
+                }`}>
+                  <Compass className="w-3 h-3 text-emerald-400" />
+                  <span>{d.name}</span>
                 </div>
-              </AdvancedMarker>
-            )}
+              </div>
+            );
+          })}
 
-            {/* Dropped Pin */}
-            {droppedPinCoords && (
-              <AdvancedMarker position={{ lat: droppedPinCoords.lat, lng: droppedPinCoords.lng }} title="Посочена точка за нов сигнал">
-                <Pin
-                  background="#10B981"
-                  borderColor="#065F46"
-                  glyphColor="#FFFFFF"
-                  scale={1.3}
-                >
-                  <span className="text-xs font-bold text-white">+</span>
-                </Pin>
-              </AdvancedMarker>
-            )}
+          {/* User GPS Location Marker */}
+          {userLocation && (
+            <div
+              className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-none z-30"
+              style={{ left: `${userLocation.x}%`, top: `${userLocation.y}%` }}
+            >
+              <div className="relative flex items-center justify-center">
+                <div className="w-10 h-10 rounded-full bg-blue-500/40 animate-ping absolute" />
+                <div className="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-lg relative" />
+              </div>
+            </div>
+          )}
 
-            {/* Report Markers */}
-            {filteredReports.map((report) => {
-              const lat = report.coordinates?.lat || 43.2047;
-              const lng = report.coordinates?.lng || 23.5477;
-              const isSelected = (selectedReportId === report.id) || (activePopupReport?.id === report.id);
-              const urgency = report.analysis?.urgencyScore ?? 50;
-              const isCritical = urgency >= 80 || report.analysis?.path === 'red';
+          {/* Dropped Pin */}
+          {droppedPinCoords && droppedPinCoords.x !== undefined && droppedPinCoords.y !== undefined && (
+            <div
+              className="absolute -translate-x-1/2 -translate-y-full pointer-events-none z-30 animate-bounce"
+              style={{ left: `${droppedPinCoords.x}%`, top: `${droppedPinCoords.y}%` }}
+            >
+              <div className="bg-emerald-600 border-2 border-white text-white font-black rounded-full w-8 h-8 flex items-center justify-center shadow-xl text-lg">
+                📍
+              </div>
+            </div>
+          )}
 
-              let pinBg = '#3B82F6';
-              let pinBorder = '#1D4ED8';
-              let glyphText = '🔵';
+          {/* Report Markers */}
+          {filteredReports.map((report) => {
+            const lat = report.coordinates?.lat || 43.2047;
+            const lng = report.coordinates?.lng || 23.5477;
+            const pt = latLngToPercent(lat, lng);
+            const isSelected = (selectedReportId === report.id) || (activePopupReport?.id === report.id);
+            const urgency = report.analysis?.urgencyScore ?? 50;
+            const isCritical = urgency >= 80 || report.analysis?.path === 'red';
 
-              if (report.status === 'решен') {
-                pinBg = '#10B981';
-                pinBorder = '#047857';
-                glyphText = '✓';
-              } else if (report.analysis?.path === 'red') {
-                pinBg = '#EF4444';
-                pinBorder = '#B91C1C';
-                glyphText = '⚠';
-              } else if (report.analysis?.path === 'yellow') {
-                pinBg = '#F59E0B';
-                pinBorder = '#B45309';
-                glyphText = '🛠';
-              }
+            let pinBg = 'bg-blue-600 border-blue-400';
+            let glyphText = '🔵';
 
-              return (
-                <AdvancedMarker
-                  key={report.id}
-                  position={{ lat, lng }}
-                  onClick={() => {
-                    setActivePopupReport(report);
-                    if (onSelectReport) onSelectReport(report.id);
-                  }}
-                  title={`${report.ticketNumber}: ${report.title}`}
-                >
-                  <div className="relative flex items-center justify-center">
-                    {isCritical && report.status !== 'решен' && (
-                      <div
-                        className="w-10 h-10 rounded-full absolute animate-ping opacity-75"
-                        style={{ backgroundColor: pinBg }}
-                      />
-                    )}
-                    <Pin
-                      background={pinBg}
-                      borderColor={isSelected ? '#FFFFFF' : pinBorder}
-                      glyphColor="#FFFFFF"
-                      scale={isSelected ? 1.35 : 1.1}
-                    >
-                      <span className="text-[11px] font-bold text-white">{glyphText}</span>
-                    </Pin>
+            if (report.status === 'решен') {
+              pinBg = 'bg-emerald-600 border-emerald-400';
+              glyphText = '✓';
+            } else if (report.analysis?.path === 'red') {
+              pinBg = 'bg-red-600 border-red-400';
+              glyphText = '⚠';
+            } else if (report.analysis?.path === 'yellow') {
+              pinBg = 'bg-amber-500 border-amber-300';
+              glyphText = '🛠';
+            }
+
+            return (
+              <div
+                key={report.id}
+                className="absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-20 cursor-pointer group"
+                style={{ left: `${pt.x}%`, top: `${pt.y}%` }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActivePopupReport(report);
+                  if (onSelectReport) onSelectReport(report.id);
+                }}
+              >
+                <div className="relative flex items-center justify-center">
+                  {isCritical && report.status !== 'решен' && showHotspots && (
+                    <div className="w-12 h-12 rounded-full bg-red-500/40 animate-ping absolute" />
+                  )}
+                  <div className={`w-8 h-8 rounded-full border-2 text-white font-bold flex items-center justify-center shadow-lg transition-transform group-hover:scale-125 ${pinBg} ${isSelected ? 'scale-125 ring-4 ring-white/80' : ''}`}>
+                    <span className="text-xs">{glyphText}</span>
                   </div>
-                </AdvancedMarker>
-              );
-            })}
-          </Map>
-        </APIProvider>
+
+                  {/* Tooltip on hover */}
+                  <div className="absolute bottom-full mb-2 hidden group-hover:block bg-slate-900 border border-slate-700 text-white text-[10px] px-2.5 py-1.5 rounded-xl shadow-2xl whitespace-nowrap z-40 pointer-events-none">
+                    <div className="font-bold">{report.ticketNumber}: {report.title}</div>
+                    <div className="text-slate-400">📍 {report.neighborhood} · Наложителност: {urgency}/100</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Map Zoom & Controls Toolbar */}
+        <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-1.5 pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => setZoomLevel((prev) => Math.min(2.5, prev + 0.25))}
+            className="w-9 h-9 bg-slate-900/90 hover:bg-slate-800 text-white border border-slate-700 rounded-xl flex items-center justify-center shadow-lg transition cursor-pointer"
+            title="Увеличи мащаба"
+          >
+            <ZoomIn className="w-4 h-4 text-emerald-400" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setZoomLevel((prev) => Math.max(1, prev - 0.25))}
+            className="w-9 h-9 bg-slate-900/90 hover:bg-slate-800 text-white border border-slate-700 rounded-xl flex items-center justify-center shadow-lg transition cursor-pointer"
+            title="Намали мащаба"
+          >
+            <ZoomOut className="w-4 h-4 text-emerald-400" />
+          </button>
+          <button
+            type="button"
+            onClick={handleResetAllFilters}
+            className="w-9 h-9 bg-slate-900/90 hover:bg-slate-800 text-white border border-slate-700 rounded-xl flex items-center justify-center shadow-lg transition cursor-pointer"
+            title="Центрирай картата"
+          >
+            <Compass className="w-4 h-4 text-cyan-400" />
+          </button>
+        </div>
 
         {/* Legend Overlay */}
         <div className="absolute top-3 left-3 z-10 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl px-3 py-2 text-xs shadow-lg space-y-1 max-w-[240px] sm:max-w-none pointer-events-auto">
           <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between gap-3">
             <span className="flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Google Maps Враца</span>
+              <span>Интерактивна карта Враца</span>
             </span>
           </div>
           <div className="flex flex-col gap-0.5 text-[10px] text-slate-400">
