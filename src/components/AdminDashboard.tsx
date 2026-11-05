@@ -32,7 +32,8 @@ import {
   fetchAllUsersFromFirestore,
   deleteUserFromFirestore,
   deleteReportFromFirestore,
-  resetWeeklyPointsForAllUsersInFirestore
+  resetWeeklyPointsForAllUsersInFirestore,
+  updateUserPointsInFirestore
 } from '../lib/firestoreService';
 import { ADMIN_USER_ID } from '../constants/admin';
 import { VRATSA_DISTRICTS } from '../data/mockReports';
@@ -80,6 +81,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const [reportToDelete, setReportToDelete] = useState<ReportItem | null>(null);
   const [isDeletingReport, setIsDeletingReport] = useState(false);
+
+  // User points edit & reset state
+  const [pointsEditUser, setPointsEditUser] = useState<VolunteerProfile | null>(null);
+  const [editWeeklyPoints, setEditWeeklyPoints] = useState<number>(0);
+  const [editTotalPoints, setEditTotalPoints] = useState<number>(0);
+  const [isSavingPoints, setIsSavingPoints] = useState<boolean>(false);
+
+  // Report action history inspection modal
+  const [inspectReportHistory, setInspectReportHistory] = useState<ReportItem | null>(null);
 
   // Notifications
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -313,6 +323,72 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       showNotice('Грешка при зануляване на седмичните точки.');
     } finally {
       setIsResettingWeekly(false);
+    }
+  };
+
+  const handleSaveUserPoints = async () => {
+    if (!pointsEditUser) return;
+    setIsSavingPoints(true);
+    try {
+      const weekly = Math.max(0, Number(editWeeklyPoints) || 0);
+      const total = Math.max(0, Number(editTotalPoints) || 0);
+
+      let newRank = pointsEditUser.rank;
+      if (total >= 1500) newRank = 'Легенда на Враца';
+      else if (total >= 1000) newRank = 'Почетен гражданин';
+      else if (total >= 500) newRank = 'Градски майстор';
+      else if (total >= 200) newRank = 'Квартален пазител';
+      else newRank = 'Новак доброволец';
+
+      await updateUserPointsInFirestore(pointsEditUser.id, {
+        weeklyPoints: weekly,
+        totalPoints: total,
+        rank: newRank
+      });
+
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === pointsEditUser.id
+            ? { ...u, weeklyPoints: weekly, totalPoints: total, rank: newRank }
+            : u
+        )
+      );
+
+      showNotice(`Точките на ${pointsEditUser.name} бяха успешно обновени (Седмични: ${weekly} т., Общо: ${total} т.)!`);
+      setPointsEditUser(null);
+    } catch (err) {
+      console.warn('Error updating points:', err);
+      showNotice('Грешка при обновяване на точките.');
+    } finally {
+      setIsSavingPoints(false);
+    }
+  };
+
+  const handleResetUserPointsToZero = async () => {
+    if (!pointsEditUser) return;
+    setIsSavingPoints(true);
+    try {
+      await updateUserPointsInFirestore(pointsEditUser.id, {
+        weeklyPoints: 0,
+        totalPoints: 0,
+        rank: 'Новак доброволец'
+      });
+
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === pointsEditUser.id
+            ? { ...u, weeklyPoints: 0, totalPoints: 0, rank: 'Новак доброволец' }
+            : u
+        )
+      );
+
+      showNotice(`Всички точки на ${pointsEditUser.name} бяха занулени (0 т.)!`);
+      setPointsEditUser(null);
+    } catch (err) {
+      console.warn('Error resetting points:', err);
+      showNotice('Грешка при зануляване на точките.');
+    } finally {
+      setIsSavingPoints(false);
     }
   };
 
@@ -791,6 +867,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <span>Решени ({userResolutions.length})</span>
                         </button>
 
+                        {/* Edit / Reset Points Button (User Request 5) */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPointsEditUser(u);
+                            setEditWeeklyPoints(u.weeklyPoints || 0);
+                            setEditTotalPoints(u.totalPoints || 0);
+                          }}
+                          className="px-3 py-2 rounded-xl bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 hover:text-white text-xs font-bold border border-amber-600/40 transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                          title="Редактирай или занули точките на този потребител"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Точки</span>
+                        </button>
+
                         {/* Delete User Button */}
                         {!isSuperAdmin ? (
                           <button
@@ -977,6 +1068,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {/* Inspect Report Action History (Admin only) */}
+                      <button
+                        type="button"
+                        onClick={() => setInspectReportHistory(report)}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-800/40 text-xs font-semibold transition cursor-pointer flex items-center gap-1"
+                        title="Прегледай историята на действията и одита за този сигнал"
+                      >
+                        <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>История</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => {
@@ -1310,6 +1412,183 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <Trash2 className="w-3.5 h-3.5" />
                 )}
                 <span>{isDeletingReport ? 'Премахване...' : 'Да, изтрий сигнала'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: EDIT OR RESET VOLUNTEER POINTS (User Request 5)
+          ========================================================================= */}
+      {pointsEditUser && (
+        <div className="fixed inset-0 z-[1300] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="space-y-0.5">
+                <span className="text-[10px] font-mono text-amber-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Административно управление на точки
+                </span>
+                <h3 className="text-base font-bold text-white">
+                  {pointsEditUser.name}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPointsEditUser(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Текущи седмични точки:</span>
+                  <span className="font-mono font-bold text-emerald-400">{pointsEditUser.weeklyPoints || 0} т.</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Текущи общи точки:</span>
+                  <span className="font-mono font-bold text-amber-400">{pointsEditUser.totalPoints || 0} т.</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Текущ ранг:</span>
+                  <span className="font-semibold text-white">{pointsEditUser.rank}</span>
+                </div>
+              </div>
+
+              {/* Quick Reset All to 0 button */}
+              <button
+                type="button"
+                onClick={handleResetUserPointsToZero}
+                disabled={isSavingPoints}
+                className="w-full py-2.5 bg-red-950/60 hover:bg-red-900 text-red-200 border border-red-700/50 rounded-xl font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Занули всички точки на този профил (0 т.)</span>
+              </button>
+
+              <div className="border-t border-slate-800 pt-3 space-y-3">
+                <span className="font-bold text-slate-300 block">
+                  Или задайте конкретни стойности:
+                </span>
+
+                <div className="space-y-1">
+                  <label className="text-slate-400 font-medium">Седмични точки (за класацията):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editWeeklyPoints}
+                    onChange={(e) => setEditWeeklyPoints(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono font-bold focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-400 font-medium">Общи точки (исторически totalPoints):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editTotalPoints}
+                    onChange={(e) => setEditTotalPoints(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono font-bold focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setPointsEditUser(null)}
+                className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                Отказ
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveUserPoints}
+                disabled={isSavingPoints}
+                className="py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition shadow-lg flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isSavingPoints ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                <span>Запази промените</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: REPORT ACTION HISTORY INSPECTION (User Request 5)
+          ========================================================================= */}
+      {inspectReportHistory && (
+        <div className="fixed inset-0 z-[1300] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-xl w-full p-5 sm:p-6 space-y-4 shadow-2xl relative max-h-[85vh] overflow-y-auto">
+            <div className="flex items-start justify-between border-b border-slate-800 pb-3">
+              <div>
+                <span className="text-[10px] font-mono text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                  <Shield className="w-3.5 h-3.5" />
+                  Административен одит на сигнала
+                </span>
+                <h3 className="text-base font-bold text-white mt-0.5">
+                  {inspectReportHistory.ticketNumber} · {inspectReportHistory.title}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectReportHistory(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="text-xs text-slate-300 bg-slate-950 p-3 rounded-xl border border-slate-800 flex items-center justify-between">
+                <span>Локация: <strong>{inspectReportHistory.location}</strong></span>
+                <span className="text-emerald-400 font-bold">Статус: {inspectReportHistory.status}</span>
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                  Хронологична история на действията:
+                </span>
+                <div className="space-y-2 text-xs">
+                  {inspectReportHistory.historyLog.map((log, lIdx) => (
+                    <div
+                      key={lIdx}
+                      className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-start justify-between gap-3"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white">{log.actor}</span>
+                          {log.badge && (
+                            <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded text-[10px]">
+                              {log.badge}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-slate-300">{log.action}</p>
+                      </div>
+                      <span className="text-slate-500 text-[11px] font-mono shrink-0">
+                        {log.timestamp}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setInspectReportHistory(null)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Затвори
               </button>
             </div>
           </div>

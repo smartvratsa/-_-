@@ -6,9 +6,316 @@ import {
   Pin,
   useMap
 } from '@vis.gl/react-google-maps';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { ReportItem } from '../types';
 import { VRATSA_DISTRICTS } from '../data/mockReports';
-import { VratsaLeafletMap, LeafletLayerType } from './VratsaLeafletMap';
+
+export type LeafletLayerType = 'osm' | 'satellite' | 'dark' | 'terrain';
+
+const TILE_PROVIDERS: Record<LeafletLayerType, { url: string; attribution: string; maxZoom: number }> = {
+  osm: {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19
+  },
+  satellite: {
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+    maxZoom: 19
+  },
+  dark: {
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 19
+  },
+  terrain: {
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
+    maxZoom: 17
+  }
+};
+
+const VRATSA_BOUNDS = L.latLngBounds(
+  [43.1600, 23.4700],
+  [43.2500, 23.6300]
+);
+
+const LeafletMapContainer: React.FC<{
+  reports: ReportItem[];
+  selectedReportId?: string | null;
+  targetDistrict: typeof VRATSA_DISTRICTS[0] | null;
+  droppedPinCoords: { lat: number; lng: number } | null;
+  userCoords: { lat: number; lng: number } | null;
+  activeLayer: LeafletLayerType;
+  showHotspots: boolean;
+  onSelectReport: (reportId: string) => void;
+  onMarkerClick: (report: ReportItem) => void;
+  onMapClickNewSignal: (coords: { lat: number; lng: number; districtName: string }) => void;
+}> = ({
+  reports,
+  selectedReportId,
+  targetDistrict,
+  droppedPinCoords,
+  userCoords,
+  activeLayer,
+  showHotspots,
+  onSelectReport,
+  onMarkerClick,
+  onMapClickNewSignal
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const hotspotsGroupRef = useRef<L.LayerGroup | null>(null);
+  const droppedPinMarkerRef = useRef<L.Marker | null>(null);
+  const userLocationMarkerRef = useRef<L.LayerGroup | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    if (!mapRef.current) {
+      const map = L.map(containerRef.current, {
+        center: [43.2047, 23.5477],
+        zoom: 13.5,
+        minZoom: 12.5,
+        maxZoom: 18,
+        maxBounds: VRATSA_BOUNDS,
+        maxBoundsViscosity: 1.0,
+        zoomControl: false,
+        attributionControl: true,
+        scrollWheelZoom: true
+      });
+
+      const provider = TILE_PROVIDERS[activeLayer] || TILE_PROVIDERS.osm;
+      const tileLayer = L.tileLayer(provider.url, {
+        attribution: provider.attribution,
+        maxZoom: provider.maxZoom
+      }).addTo(map);
+      tileLayerRef.current = tileLayer;
+
+      hotspotsGroupRef.current = L.layerGroup().addTo(map);
+      markersGroupRef.current = L.layerGroup().addTo(map);
+      userLocationMarkerRef.current = L.layerGroup().addTo(map);
+
+      mapRef.current = map;
+
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 250);
+
+      map.on('click', (e: L.LeafletMouseEvent) => {
+        const { lat, lng } = e.latlng;
+        let nearestDistrict = 'Център';
+        let minDistance = Infinity;
+
+        VRATSA_DISTRICTS.forEach((d) => {
+          if (d.id === 'all') return;
+          const dist = Math.hypot(d.lat - lat, d.lng - lng);
+          if (dist < minDistance) {
+            minDistance = dist;
+            nearestDistrict = d.name;
+          }
+        });
+
+        if (onMapClickNewSignal) {
+          onMapClickNewSignal({ lat, lng, districtName: nearestDistrict });
+        }
+      });
+    }
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+        markersGroupRef.current = null;
+        hotspotsGroupRef.current = null;
+        userLocationMarkerRef.current = null;
+        tileLayerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+    const provider = TILE_PROVIDERS[activeLayer] || TILE_PROVIDERS.osm;
+    tileLayerRef.current = L.tileLayer(provider.url, {
+      attribution: provider.attribution,
+      maxZoom: provider.maxZoom
+    }).addTo(map);
+  }, [activeLayer]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !targetDistrict) return;
+    if (targetDistrict.id === 'all') {
+      map.panTo([43.2047, 23.5477]);
+      map.setZoom(13.5);
+    } else {
+      map.panTo([targetDistrict.lat, targetDistrict.lng]);
+      map.setZoom(targetDistrict.zoom);
+    }
+  }, [targetDistrict]);
+
+  useEffect(() => {
+    const userGroup = userLocationMarkerRef.current;
+    if (!userGroup) return;
+    userGroup.clearLayers();
+    if (userCoords) {
+      const userIcon = L.divIcon({
+        className: 'user-gps-pulse-marker',
+        html: `
+          <div style="position: relative; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background-color: rgba(59, 130, 246, 0.4); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="position: relative; width: 16px; height: 16px; border-radius: 9999px; background-color: #2563EB; border: 3px solid #FFFFFF; box-shadow: 0 0 10px rgba(37, 99, 235, 0.8);"></div>
+          </div>
+        `,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+      });
+      const userMarker = L.marker([userCoords.lat, userCoords.lng], {
+        icon: userIcon,
+        title: 'Вашето текущо местоположение'
+      });
+      userMarker.bindTooltip('📍 Вие сте тук', {
+        permanent: false,
+        direction: 'top',
+        className: 'bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded shadow-lg'
+      });
+      userGroup.addLayer(userMarker);
+    }
+  }, [userCoords]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (droppedPinMarkerRef.current) {
+      droppedPinMarkerRef.current.remove();
+      droppedPinMarkerRef.current = null;
+    }
+    if (droppedPinCoords) {
+      const pinIcon = L.divIcon({
+        className: 'leaflet-dropped-pin-icon',
+        html: `
+          <div style="background: #10B981; border: 3px solid #065F46; color: white; border-radius: 9999px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; box-shadow: 0 4px 16px rgba(16, 185, 129, 0.7);">+</div>
+        `,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18]
+      });
+      droppedPinMarkerRef.current = L.marker([droppedPinCoords.lat, droppedPinCoords.lng], {
+        icon: pinIcon,
+        title: 'Нова посочена точка за сигнал'
+      }).addTo(map);
+    }
+  }, [droppedPinCoords]);
+
+  useEffect(() => {
+    const markersGroup = markersGroupRef.current;
+    const hotspotsGroup = hotspotsGroupRef.current;
+    if (!markersGroup || !hotspotsGroup) return;
+
+    markersGroup.clearLayers();
+    hotspotsGroup.clearLayers();
+
+    reports.forEach((report) => {
+      const lat = report.coordinates?.lat || 43.2047;
+      const lng = report.coordinates?.lng || 23.5477;
+      const isSelected = selectedReportId === report.id;
+      const urgencyScore = report.analysis?.urgencyScore ?? 50;
+      const isCritical = urgencyScore >= 80 || report.analysis?.path === 'red';
+
+      if (showHotspots && isCritical && report.status !== 'решен') {
+        const circle = L.circle([lat, lng], {
+          color: '#EF4444',
+          fillColor: '#EF4444',
+          fillOpacity: 0.18,
+          radius: 120,
+          weight: 1.5,
+          dashArray: '4, 4'
+        });
+        hotspotsGroup.addLayer(circle);
+      }
+
+      let pinBg = '#3B82F6';
+      let pinBorder = '#1D4ED8';
+      let glyphText = '🔵';
+
+      if (report.status === 'решен') {
+        pinBg = '#10B981';
+        pinBorder = '#047857';
+        glyphText = '✓';
+      } else if (report.analysis?.path === 'red') {
+        pinBg = '#EF4444';
+        pinBorder = '#991B1B';
+        glyphText = '⚠';
+      } else if (report.analysis?.path === 'yellow') {
+        pinBg = '#F59E0B';
+        pinBorder = '#B45309';
+        glyphText = '🛠';
+      }
+
+      const size = isSelected ? 38 : isCritical ? 34 : 30;
+      const markerHtml = `
+        <div style="position: relative; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center;">
+          ${
+            isCritical && report.status !== 'решен'
+              ? `<div style="position: absolute; inset: -6px; border-radius: 9999px; border: 2px solid ${pinBg}; animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; opacity: 0.75;"></div>`
+              : ''
+          }
+          <div style="background-color: ${pinBg}; border: ${isSelected ? '3px solid #FFFFFF' : `2px solid ${pinBorder}`}; color: #FFFFFF; border-radius: 9999px; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center; font-size: ${isSelected ? '14px' : '12px'}; font-weight: 800; box-shadow: ${isSelected ? '0 0 16px rgba(255,255,255,0.8)' : '0 4px 10px rgba(0,0,0,0.5)'}; cursor: pointer; transform: ${isSelected ? 'scale(1.15)' : 'scale(1)'}; transition: transform 0.2s;">
+            ${glyphText}
+          </div>
+        </div>
+      `;
+
+      const markerIcon = L.divIcon({
+        className: 'leaflet-custom-report-icon',
+        html: markerHtml,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2]
+      });
+
+      const marker = L.marker([lat, lng], {
+        icon: markerIcon,
+        title: `${report.ticketNumber}: ${report.title}`
+      });
+
+      const tooltipContent = `
+        <div style="font-family: sans-serif; font-size: 11px; padding: 2px 4px;">
+          <div style="font-weight: 800; color: #FFFFFF; line-height: 1.2;">${report.ticketNumber}: ${report.title}</div>
+          <div style="color: #94A3B8; font-size: 10px; margin-top: 2px;">📍 ${report.neighborhood || 'Враца'} · Наложителност: <strong style="color: ${urgencyScore >= 80 ? '#F87171' : urgencyScore >= 50 ? '#FBBF24' : '#60A5FA'}">${urgencyScore}/100</strong></div>
+        </div>
+      `;
+
+      marker.bindTooltip(tooltipContent, {
+        direction: 'top',
+        offset: [0, -size / 2],
+        opacity: 0.95,
+        className: 'leaflet-custom-tooltip bg-slate-900 border border-slate-700 text-white rounded-lg shadow-xl'
+      });
+
+      marker.on('click', () => {
+        onSelectReport(report.id);
+        onMarkerClick(report);
+      });
+
+      markersGroup.addLayer(marker);
+    });
+  }, [reports, selectedReportId, showHotspots, onSelectReport, onMarkerClick]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="w-full h-full z-0 touch-pan-x touch-pan-y"
+      style={{ minHeight: '100%', width: '100%' }}
+    />
+  );
+};
 import {
   MapPin,
   Flame,
@@ -961,7 +1268,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             </Map>
           </APIProvider>
         ) : (
-          <VratsaLeafletMap
+          <LeafletMapContainer
             reports={filteredReports}
             selectedReportId={activePopupReport?.id || selectedReportId}
             targetDistrict={targetDistrict}

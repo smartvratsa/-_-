@@ -15,7 +15,8 @@ import {
   addPointsToVolunteerInFirestore,
   deleteReportFromFirestore,
   sanitizeReport,
-  checkAndAutoResetWeeklyLeaderboard
+  checkAndAutoResetWeeklyLeaderboard,
+  updateUserActiveClaimedTaskInFirestore
 } from './lib/firestoreService';
 import { Header } from './components/Header';
 import { VratsaInteractiveMap } from './components/VratsaInteractiveMap';
@@ -308,6 +309,19 @@ export default function App() {
       showToast(`Сигнал ${newReport.ticketNumber} е регистриран! Влезте в профила си, за да запазите +50 точки за класацията.`);
     }
 
+    // If user chose to auto-claim this report immediately upon posting
+    if (newReport.claimedBy && currentVolunteer) {
+      const updatedWithClaim: VolunteerProfile = {
+        ...currentVolunteer,
+        activeClaimedTaskId: newReport.id,
+        activeAssignments: Array.from(new Set([...currentVolunteer.activeAssignments, newReport.id]))
+      };
+      setCurrentVolunteer(updatedWithClaim);
+      saveUserProfileToFirestore(updatedWithClaim).catch(() => {});
+      updateUserActiveClaimedTaskInFirestore(currentVolunteer.id, newReport.id).catch(() => {});
+      showToast(`Успешно качихте и поехте задача ${newReport.ticketNumber}! AI таймерът стартира. ⏱️`);
+    }
+
     // 3. Save directly to Firestore
     saveReportToFirestore(newReport).catch((e) => console.warn('Could not save to Firestore:', e));
 
@@ -544,17 +558,286 @@ export default function App() {
     showToast(`Сигналът е насочен към: ${dept}`);
   };
 
-  // Resolution photo success handler with AI point awards
-  const handleResolutionSuccess = (updatedReport: ReportItem, pointsAwarded: number) => {
+  // Task Claim Handler (Take charge as Leader with 1-active-task limit)
+  const handleClaimTask = (reportId: string, isPrivate: boolean, inviteCode?: string) => {
+    if (!currentVolunteer) {
+      handleOpenLogin();
+      return;
+    }
+
+    if (currentVolunteer.activeClaimedTaskId && currentVolunteer.activeClaimedTaskId !== reportId) {
+      showToast('⚠️ Вече имате 1 активна поета задача! Завършете я, преди да поемете нова.');
+      return;
+    }
+
+    const now = Date.now();
+    const minMinutes = 10;
+    const targetReport = reports.find((r) => r.id === reportId);
+    const maxTeam = targetReport?.maxTeamSize || targetReport?.analysis?.plan?.people || 3;
+
+    const claimedPayload = {
+      uid: currentVolunteer.id,
+      name: currentVolunteer.name,
+      claimedAt: now,
+      isPrivate,
+      inviteCode
+    };
+
+    const teamPayload = [{ uid: currentVolunteer.id, name: currentVolunteer.name, joinedAt: now }];
+
+    setReports((prev) =>
+      prev.map((r) => {
+        if (r.id === reportId) {
+          return {
+            ...r,
+            status: 'в_изпълнение',
+            volunteersCount: 1,
+            volunteers: [currentVolunteer.name],
+            claimedBy: claimedPayload,
+            taskStartedAt: now,
+            minimumRequiredMinutes: minMinutes,
+            maxTeamSize: maxTeam,
+            teamMembers: teamPayload,
+            historyLog: [
+              ...r.historyLog,
+              {
+                timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                actor: currentVolunteer.name,
+                action: isPrivate
+                  ? `Пое задачата като ръководител (с код за достъп). Отговорът ще е възможен след 10 мин.`
+                  : `Пое задачата като ръководител (отворен екип). Отговорът ще е възможен след 10 мин.`,
+                badge: 'Поета задача'
+              }
+            ]
+          };
+        }
+        return r;
+      })
+    );
+
+    // Update volunteer profile with 1 active claimed task limit
+    const updatedVolunteer: VolunteerProfile = {
+      ...currentVolunteer,
+      activeClaimedTaskId: reportId,
+      activeAssignments: Array.from(new Set([...currentVolunteer.activeAssignments, reportId]))
+    };
+    setCurrentVolunteer(updatedVolunteer);
+    saveUserProfileToFirestore(updatedVolunteer).catch(() => {});
+    updateUserActiveClaimedTaskInFirestore(currentVolunteer.id, reportId).catch(() => {});
+
+    // Sync report to Firestore
+    updateReportInFirestore(reportId, {
+      status: 'в_изпълнение',
+      volunteersCount: 1,
+      volunteers: [currentVolunteer.name],
+      claimedBy: claimedPayload,
+      taskStartedAt: now,
+      minimumRequiredMinutes: minMinutes,
+      maxTeamSize: maxTeam,
+      teamMembers: teamPayload
+    }).catch((e) => console.warn('Could not claim task in Firestore:', e));
+
+    showToast('Успешно поехте задачата! След 10 минути ще можете да отговорите на сигнала. ⏱️');
+  };
+
+  // Join Task as Team Member (No 1-task limit on joining!)
+  const handleJoinTeam = (reportId: string, inviteCodeInput?: string) => {
+    if (!currentVolunteer) {
+      handleOpenLogin();
+      return;
+    }
+
+    const targetReport = reports.find((r) => r.id === reportId);
+    if (!targetReport) return;
+
+    if (targetReport.claimedBy?.isPrivate && targetReport.claimedBy?.inviteCode) {
+      if (inviteCodeInput !== targetReport.claimedBy.inviteCode) {
+        showToast('Грешен код за достъп!');
+        return;
+      }
+    }
+
+    const now = Date.now();
+    const existingMembers = targetReport.teamMembers || [];
+    if (existingMembers.some((m) => m.uid === currentVolunteer.id)) {
+      showToast('Вече сте част от екипа на тази задача!');
+      return;
+    }
+
+    const maxTeam = targetReport.maxTeamSize || targetReport.analysis?.plan?.people || 3;
+    if (existingMembers.length >= maxTeam) {
+      showToast(`Екипът е запълнен (макс. ${maxTeam} души).`);
+      return;
+    }
+
+    const newTeamMember = { uid: currentVolunteer.id, name: currentVolunteer.name, joinedAt: now };
+    const updatedTeam = [...existingMembers, newTeamMember];
+    const updatedVolunteers = Array.from(new Set([...targetReport.volunteers, currentVolunteer.name]));
+
+    setReports((prev) =>
+      prev.map((r) => {
+        if (r.id === reportId) {
+          return {
+            ...r,
+            volunteersCount: updatedTeam.length,
+            volunteers: updatedVolunteers,
+            teamMembers: updatedTeam,
+            historyLog: [
+              ...r.historyLog,
+              {
+                timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                actor: currentVolunteer.name,
+                action: `Се присъедини към екипа на ${targetReport.claimedBy?.name || 'задачата'}`
+              }
+            ]
+          };
+        }
+        return r;
+      })
+    );
+
+    setCurrentVolunteer((prev) =>
+      prev
+        ? {
+            ...prev,
+            activeAssignments: Array.from(new Set([...prev.activeAssignments, reportId]))
+          }
+        : null
+    );
+
+    updateReportInFirestore(reportId, {
+      volunteersCount: updatedTeam.length,
+      volunteers: updatedVolunteers,
+      teamMembers: updatedTeam
+    }).catch((e) => console.warn('Could not join task in Firestore:', e));
+
+    showToast(`Присъединихте се към екипа на „${targetReport.title}“! 👥`);
+  };
+
+  // Leave / Release Task (Leader releases task or team member leaves team)
+  const handleReleaseTask = (reportId: string) => {
+    const targetReport = reports.find((r) => r.id === reportId);
+    if (!targetReport || !currentVolunteer) return;
+
+    const isLeader = targetReport.claimedBy?.uid === currentVolunteer.id;
+
+    if (isLeader) {
+      // Leader drops the task -> reset task so other volunteers can claim it
+      setReports((prev) =>
+        prev.map((r) => {
+          if (r.id === reportId) {
+            return {
+              ...r,
+              status: 'одобрен',
+              claimedBy: undefined,
+              taskStartedAt: undefined,
+              teamMembers: [],
+              volunteersCount: 0,
+              volunteers: [],
+              historyLog: [
+                ...r.historyLog,
+                {
+                  timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  actor: currentVolunteer.name,
+                  action: 'Остави сигнала и освободи задачата за други граждани.'
+                }
+              ]
+            };
+          }
+          return r;
+        })
+      );
+
+      const updatedVolunteer: VolunteerProfile = {
+        ...currentVolunteer,
+        activeClaimedTaskId: undefined,
+        activeAssignments: currentVolunteer.activeAssignments.filter((id) => id !== reportId)
+      };
+      setCurrentVolunteer(updatedVolunteer);
+      saveUserProfileToFirestore(updatedVolunteer).catch(() => {});
+      updateUserActiveClaimedTaskInFirestore(currentVolunteer.id, null).catch(() => {});
+
+      updateReportInFirestore(reportId, {
+        status: 'одобрен',
+        claimedBy: undefined,
+        taskStartedAt: undefined,
+        teamMembers: [],
+        volunteersCount: 0,
+        volunteers: []
+      }).catch(() => {});
+
+      showToast('Успешно оставихте сигнала! Вече можете да поемете друг сигнал.');
+    } else {
+      // Team member leaves
+      const updatedTeam = (targetReport.teamMembers || []).filter((m) => m.uid !== currentVolunteer.id);
+      const updatedVolunteers = targetReport.volunteers.filter((v) => v !== currentVolunteer.name);
+
+      setReports((prev) =>
+        prev.map((r) => {
+          if (r.id === reportId) {
+            return {
+              ...r,
+              teamMembers: updatedTeam,
+              volunteers: updatedVolunteers,
+              volunteersCount: updatedTeam.length,
+              historyLog: [
+                ...r.historyLog,
+                {
+                  timestamp: 'Днес, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  actor: currentVolunteer.name,
+                  action: 'Напусна екипа на сигнала.'
+                }
+              ]
+            };
+          }
+          return r;
+        })
+      );
+
+      const updatedVolunteer: VolunteerProfile = {
+        ...currentVolunteer,
+        activeAssignments: currentVolunteer.activeAssignments.filter((id) => id !== reportId)
+      };
+      setCurrentVolunteer(updatedVolunteer);
+      saveUserProfileToFirestore(updatedVolunteer).catch(() => {});
+
+      updateReportInFirestore(reportId, {
+        teamMembers: updatedTeam,
+        volunteers: updatedVolunteers,
+        volunteersCount: updatedTeam.length
+      }).catch(() => {});
+
+      showToast('Успешно напуснахте екипа на този сигнал.');
+    }
+  };
+
+  // Resolution photo success handler with Team Synergy Bonus & multi-member points distribution
+  const handleResolutionSuccess = (
+    updatedReport: ReportItem,
+    pointsAwardedPerMember: number,
+    teamMembers: { uid: string; name: string }[]
+  ) => {
     setReports((prev) => prev.map((r) => (r.id === updatedReport.id ? updatedReport : r)));
 
-    // Credit points to volunteer profile
-    if (currentVolunteer) {
-      const newWeekly = currentVolunteer.weeklyPoints + pointsAwarded;
-      const newTotal = currentVolunteer.totalPoints + pointsAwarded;
-      const newResolvedCount = currentVolunteer.resolvedTasksCount + 1;
+    // Distribute points to ALL team members in Firestore
+    teamMembers.forEach((member) => {
+      if (member.uid && member.uid !== 'temp-lead') {
+        addPointsToVolunteerInFirestore(member.uid, pointsAwardedPerMember).catch(() => {});
+      }
+    });
 
-      // Determine rank progression
+    // Clear activeClaimedTaskId for the task leader
+    const leaderUid = updatedReport.claimedBy?.uid;
+    if (leaderUid) {
+      updateUserActiveClaimedTaskInFirestore(leaderUid, null).catch(() => {});
+    }
+
+    // Update current volunteer profile if they were part of the team
+    if (currentVolunteer && teamMembers.some((m) => m.uid === currentVolunteer.id)) {
+      const newWeekly = (currentVolunteer.weeklyPoints || 0) + pointsAwardedPerMember;
+      const newTotal = (currentVolunteer.totalPoints || 0) + pointsAwardedPerMember;
+      const newResolvedCount = (currentVolunteer.resolvedTasksCount || 0) + 1;
+
       let newRank = currentVolunteer.rank;
       if (newTotal >= 1500) newRank = 'Легенда на Враца';
       else if (newTotal >= 1000) newRank = 'Почетен гражданин';
@@ -569,7 +852,7 @@ export default function App() {
         location: updatedReport.location,
         resolvedAt: updatedReport.resolvedAt,
         resolvedImageUrl: updatedReport.resolvedImageUrl,
-        pointsAwarded: pointsAwarded,
+        pointsAwarded: pointsAwardedPerMember,
       };
 
       const updatedHistory = [
@@ -583,30 +866,13 @@ export default function App() {
         totalPoints: newTotal,
         resolvedTasksCount: newResolvedCount,
         rank: newRank,
+        activeClaimedTaskId: currentVolunteer.activeClaimedTaskId === updatedReport.id ? undefined : currentVolunteer.activeClaimedTaskId,
         activeAssignments: currentVolunteer.activeAssignments.filter((id) => id !== updatedReport.id),
         resolvedHistory: updatedHistory,
       };
 
       setCurrentVolunteer(updatedVolunteer);
-
-      // Direct Firestore user profile sync (permanently saves points, badge progression, and resolved history)
-      saveUserProfileToFirestore(updatedVolunteer)
-        .catch((e) => console.warn('Could not save user profile with resolved history:', e));
-
-      // Direct Firestore points sync
-      addPointsToVolunteerInFirestore(currentVolunteer.id, pointsAwarded, newRank)
-        .catch((e) => console.warn('Could not add points in Firestore:', e));
-
-      // Optional backend sync
-      fetch('/api/users/add-points', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uid: currentVolunteer.id,
-          points: pointsAwarded,
-          rank: newRank,
-        }),
-      }).catch(() => {});
+      saveUserProfileToFirestore(updatedVolunteer).catch(() => {});
     }
 
     // Direct Firestore report resolution sync
@@ -615,22 +881,11 @@ export default function App() {
       resolvedImageUrl: updatedReport.resolvedImageUrl,
       resolvedAt: updatedReport.resolvedAt,
       resolvedByVolunteer: updatedReport.resolvedByVolunteer,
+      resolutionVerification: updatedReport.resolutionVerification
     }).catch((e) => console.warn('Could not sync resolution to Firestore:', e));
 
-    // Optional backend sync
-    fetch(`/api/reports/${updatedReport.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        status: 'решен',
-        resolvedImageUrl: updatedReport.resolvedImageUrl,
-        resolvedAt: updatedReport.resolvedAt,
-        resolvedByVolunteer: updatedReport.resolvedByVolunteer,
-      }),
-    }).catch(() => {});
-
+    showToast(`Поздравления! Задачата е успешно решена. Всеки член на екипа получи +${pointsAwardedPerMember} точки! 🏆`);
     setResolutionReport(null);
-    showToast(`Браво! AI присъди +${pointsAwarded} точки за седмичната класация!`);
   };
 
   // Open solved case detail
@@ -828,6 +1083,11 @@ export default function App() {
             isAdmin={isAdminUser(currentVolunteer)}
             onDeleteReport={handleDeleteReport}
             focusedReportId={selectedReportId}
+            currentVolunteer={currentVolunteer}
+            onOpenLogin={handleOpenLogin}
+            onClaimTask={handleClaimTask}
+            onJoinTeam={handleJoinTeam}
+            onReleaseTask={handleReleaseTask}
           />
         )}
 
@@ -906,6 +1166,7 @@ export default function App() {
                   onResolveReport={(report) => setResolutionReport(report)}
                   onNavigateToMap={() => setActiveTab('map')}
                   onNavigateToGuide={() => setActiveTab('guide')}
+                  onLeaveTask={handleReleaseTask}
                 />
               </div>
             )
@@ -936,6 +1197,7 @@ export default function App() {
           volunteerName={currentVolunteer?.name || 'Доброволец от Враца'}
           onClose={() => setResolutionReport(null)}
           onSuccess={handleResolutionSuccess}
+          isAdmin={isAdminUser(currentVolunteer)}
         />
       )}
 
