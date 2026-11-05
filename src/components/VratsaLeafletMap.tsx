@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import { ReportItem } from '../types';
 import { VRATSA_DISTRICTS } from '../data/mockReports';
 
-export type LeafletLayerType = 'voyager' | 'satellite' | 'dark' | 'terrain';
+export type LeafletLayerType = 'osm' | 'satellite' | 'dark' | 'terrain';
 
 interface VratsaLeafletMapProps {
   reports: ReportItem[];
@@ -21,11 +21,11 @@ interface VratsaLeafletMapProps {
   onZoomChange?: (zoom: number) => void;
 }
 
-// Tile Layer URL Providers (Voyager styled like Google Maps Roadmap)
+// Tile Layer URL Providers
 const TILE_PROVIDERS: Record<LeafletLayerType, { url: string; attribution: string; maxZoom: number }> = {
-  voyager: {
-    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a> (Google Maps Style)',
+  osm: {
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19
   },
   satellite: {
@@ -85,12 +85,12 @@ export const VratsaLeafletMap: React.FC<VratsaLeafletMapProps> = ({
         maxBoundsViscosity: 1.0, // 100% strictly locked to Vratsa only
         zoomControl: false,
         attributionControl: true,
-        scrollWheelZoom: 'center',
+        scrollWheelZoom: true,
         tapHold: false
       });
 
       // Add active base tile layer
-      const provider = TILE_PROVIDERS[activeLayer as keyof typeof TILE_PROVIDERS] || TILE_PROVIDERS.voyager;
+      const provider = TILE_PROVIDERS[activeLayer] || TILE_PROVIDERS.osm;
       const tileLayer = L.tileLayer(provider.url, {
         attribution: provider.attribution,
         maxZoom: provider.maxZoom
@@ -155,7 +155,7 @@ export const VratsaLeafletMap: React.FC<VratsaLeafletMapProps> = ({
       map.removeLayer(tileLayerRef.current);
     }
 
-    const provider = TILE_PROVIDERS[activeLayer as keyof typeof TILE_PROVIDERS] || TILE_PROVIDERS.voyager;
+    const provider = TILE_PROVIDERS[activeLayer] || TILE_PROVIDERS.osm;
     const newTileLayer = L.tileLayer(provider.url, {
       attribution: provider.attribution,
       maxZoom: provider.maxZoom

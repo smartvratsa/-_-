@@ -98,22 +98,6 @@ export interface ReportItem {
   authorId?: string;
   municipalNotes?: string;
   assignedDepartment?: string;
-  // Task Claiming & Team Collaboration
-  claimedBy?: {
-    uid: string;
-    name: string;
-    claimedAt: number;
-    isPrivate?: boolean;
-    inviteCode?: string;
-  };
-  taskStartedAt?: number;
-  minimumRequiredMinutes?: number;
-  maxTeamSize?: number;
-  teamMembers?: {
-    uid: string;
-    name: string;
-    joinedAt: number;
-  }[];
   // Resolution details
   resolvedImageUrl?: string;
   resolvedAt?: string;
@@ -146,7 +130,6 @@ export interface VolunteerProfile {
   totalPoints: number;
   resolvedTasksCount: number;
   activeAssignments: string[]; // report ids
-  activeClaimedTaskId?: string; // single active claimed task lead limit
   rank: VolunteerRank;
   skills?: string;
   preferredCategories?: string[];
