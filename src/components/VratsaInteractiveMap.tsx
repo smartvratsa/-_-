@@ -1,3 +1,4 @@
+// Source: Google Maps Platform Code Assist
 import React, { useState, useEffect, useRef } from 'react';
 import {
   APIProvider,
@@ -6,316 +7,8 @@ import {
   Pin,
   useMap
 } from '@vis.gl/react-google-maps';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { ReportItem } from '../types';
 import { VRATSA_DISTRICTS } from '../data/mockReports';
-
-export type LeafletLayerType = 'osm' | 'satellite' | 'dark' | 'terrain';
-
-const TILE_PROVIDERS: Record<LeafletLayerType, { url: string; attribution: string; maxZoom: number }> = {
-  osm: {
-    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19
-  },
-  satellite: {
-    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
-    maxZoom: 19
-  },
-  dark: {
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-    maxZoom: 19
-  },
-  terrain: {
-    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
-    maxZoom: 17
-  }
-};
-
-const VRATSA_BOUNDS = L.latLngBounds(
-  [43.1600, 23.4700],
-  [43.2500, 23.6300]
-);
-
-const LeafletMapContainer: React.FC<{
-  reports: ReportItem[];
-  selectedReportId?: string | null;
-  targetDistrict: typeof VRATSA_DISTRICTS[0] | null;
-  droppedPinCoords: { lat: number; lng: number } | null;
-  userCoords: { lat: number; lng: number } | null;
-  activeLayer: LeafletLayerType;
-  showHotspots: boolean;
-  onSelectReport: (reportId: string) => void;
-  onMarkerClick: (report: ReportItem) => void;
-  onMapClickNewSignal: (coords: { lat: number; lng: number; districtName: string }) => void;
-}> = ({
-  reports,
-  selectedReportId,
-  targetDistrict,
-  droppedPinCoords,
-  userCoords,
-  activeLayer,
-  showHotspots,
-  onSelectReport,
-  onMarkerClick,
-  onMapClickNewSignal
-}) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const tileLayerRef = useRef<L.TileLayer | null>(null);
-  const markersGroupRef = useRef<L.LayerGroup | null>(null);
-  const hotspotsGroupRef = useRef<L.LayerGroup | null>(null);
-  const droppedPinMarkerRef = useRef<L.Marker | null>(null);
-  const userLocationMarkerRef = useRef<L.LayerGroup | null>(null);
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    if (!mapRef.current) {
-      const map = L.map(containerRef.current, {
-        center: [43.2047, 23.5477],
-        zoom: 13.5,
-        minZoom: 12.5,
-        maxZoom: 18,
-        maxBounds: VRATSA_BOUNDS,
-        maxBoundsViscosity: 1.0,
-        zoomControl: false,
-        attributionControl: true,
-        scrollWheelZoom: true
-      });
-
-      const provider = TILE_PROVIDERS[activeLayer] || TILE_PROVIDERS.osm;
-      const tileLayer = L.tileLayer(provider.url, {
-        attribution: provider.attribution,
-        maxZoom: provider.maxZoom
-      }).addTo(map);
-      tileLayerRef.current = tileLayer;
-
-      hotspotsGroupRef.current = L.layerGroup().addTo(map);
-      markersGroupRef.current = L.layerGroup().addTo(map);
-      userLocationMarkerRef.current = L.layerGroup().addTo(map);
-
-      mapRef.current = map;
-
-      setTimeout(() => {
-        map.invalidateSize();
-      }, 250);
-
-      map.on('click', (e: L.LeafletMouseEvent) => {
-        const { lat, lng } = e.latlng;
-        let nearestDistrict = 'Център';
-        let minDistance = Infinity;
-
-        VRATSA_DISTRICTS.forEach((d) => {
-          if (d.id === 'all') return;
-          const dist = Math.hypot(d.lat - lat, d.lng - lng);
-          if (dist < minDistance) {
-            minDistance = dist;
-            nearestDistrict = d.name;
-          }
-        });
-
-        if (onMapClickNewSignal) {
-          onMapClickNewSignal({ lat, lng, districtName: nearestDistrict });
-        }
-      });
-    }
-
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-        markersGroupRef.current = null;
-        hotspotsGroupRef.current = null;
-        userLocationMarkerRef.current = null;
-        tileLayerRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (tileLayerRef.current) {
-      map.removeLayer(tileLayerRef.current);
-    }
-    const provider = TILE_PROVIDERS[activeLayer] || TILE_PROVIDERS.osm;
-    tileLayerRef.current = L.tileLayer(provider.url, {
-      attribution: provider.attribution,
-      maxZoom: provider.maxZoom
-    }).addTo(map);
-  }, [activeLayer]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !targetDistrict) return;
-    if (targetDistrict.id === 'all') {
-      map.panTo([43.2047, 23.5477]);
-      map.setZoom(13.5);
-    } else {
-      map.panTo([targetDistrict.lat, targetDistrict.lng]);
-      map.setZoom(targetDistrict.zoom);
-    }
-  }, [targetDistrict]);
-
-  useEffect(() => {
-    const userGroup = userLocationMarkerRef.current;
-    if (!userGroup) return;
-    userGroup.clearLayers();
-    if (userCoords) {
-      const userIcon = L.divIcon({
-        className: 'user-gps-pulse-marker',
-        html: `
-          <div style="position: relative; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
-            <div style="position: absolute; width: 32px; height: 32px; border-radius: 9999px; background-color: rgba(59, 130, 246, 0.4); animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-            <div style="position: relative; width: 16px; height: 16px; border-radius: 9999px; background-color: #2563EB; border: 3px solid #FFFFFF; box-shadow: 0 0 10px rgba(37, 99, 235, 0.8);"></div>
-          </div>
-        `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16]
-      });
-      const userMarker = L.marker([userCoords.lat, userCoords.lng], {
-        icon: userIcon,
-        title: 'Вашето текущо местоположение'
-      });
-      userMarker.bindTooltip('📍 Вие сте тук', {
-        permanent: false,
-        direction: 'top',
-        className: 'bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded shadow-lg'
-      });
-      userGroup.addLayer(userMarker);
-    }
-  }, [userCoords]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (droppedPinMarkerRef.current) {
-      droppedPinMarkerRef.current.remove();
-      droppedPinMarkerRef.current = null;
-    }
-    if (droppedPinCoords) {
-      const pinIcon = L.divIcon({
-        className: 'leaflet-dropped-pin-icon',
-        html: `
-          <div style="background: #10B981; border: 3px solid #065F46; color: white; border-radius: 9999px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; box-shadow: 0 4px 16px rgba(16, 185, 129, 0.7);">+</div>
-        `,
-        iconSize: [36, 36],
-        iconAnchor: [18, 18]
-      });
-      droppedPinMarkerRef.current = L.marker([droppedPinCoords.lat, droppedPinCoords.lng], {
-        icon: pinIcon,
-        title: 'Нова посочена точка за сигнал'
-      }).addTo(map);
-    }
-  }, [droppedPinCoords]);
-
-  useEffect(() => {
-    const markersGroup = markersGroupRef.current;
-    const hotspotsGroup = hotspotsGroupRef.current;
-    if (!markersGroup || !hotspotsGroup) return;
-
-    markersGroup.clearLayers();
-    hotspotsGroup.clearLayers();
-
-    reports.forEach((report) => {
-      const lat = report.coordinates?.lat || 43.2047;
-      const lng = report.coordinates?.lng || 23.5477;
-      const isSelected = selectedReportId === report.id;
-      const urgencyScore = report.analysis?.urgencyScore ?? 50;
-      const isCritical = urgencyScore >= 80 || report.analysis?.path === 'red';
-
-      if (showHotspots && isCritical && report.status !== 'решен') {
-        const circle = L.circle([lat, lng], {
-          color: '#EF4444',
-          fillColor: '#EF4444',
-          fillOpacity: 0.18,
-          radius: 120,
-          weight: 1.5,
-          dashArray: '4, 4'
-        });
-        hotspotsGroup.addLayer(circle);
-      }
-
-      let pinBg = '#3B82F6';
-      let pinBorder = '#1D4ED8';
-      let glyphText = '🔵';
-
-      if (report.status === 'решен') {
-        pinBg = '#10B981';
-        pinBorder = '#047857';
-        glyphText = '✓';
-      } else if (report.analysis?.path === 'red') {
-        pinBg = '#EF4444';
-        pinBorder = '#991B1B';
-        glyphText = '⚠';
-      } else if (report.analysis?.path === 'yellow') {
-        pinBg = '#F59E0B';
-        pinBorder = '#B45309';
-        glyphText = '🛠';
-      }
-
-      const size = isSelected ? 38 : isCritical ? 34 : 30;
-      const markerHtml = `
-        <div style="position: relative; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center;">
-          ${
-            isCritical && report.status !== 'решен'
-              ? `<div style="position: absolute; inset: -6px; border-radius: 9999px; border: 2px solid ${pinBg}; animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; opacity: 0.75;"></div>`
-              : ''
-          }
-          <div style="background-color: ${pinBg}; border: ${isSelected ? '3px solid #FFFFFF' : `2px solid ${pinBorder}`}; color: #FFFFFF; border-radius: 9999px; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center; font-size: ${isSelected ? '14px' : '12px'}; font-weight: 800; box-shadow: ${isSelected ? '0 0 16px rgba(255,255,255,0.8)' : '0 4px 10px rgba(0,0,0,0.5)'}; cursor: pointer; transform: ${isSelected ? 'scale(1.15)' : 'scale(1)'}; transition: transform 0.2s;">
-            ${glyphText}
-          </div>
-        </div>
-      `;
-
-      const markerIcon = L.divIcon({
-        className: 'leaflet-custom-report-icon',
-        html: markerHtml,
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2]
-      });
-
-      const marker = L.marker([lat, lng], {
-        icon: markerIcon,
-        title: `${report.ticketNumber}: ${report.title}`
-      });
-
-      const tooltipContent = `
-        <div style="font-family: sans-serif; font-size: 11px; padding: 2px 4px;">
-          <div style="font-weight: 800; color: #FFFFFF; line-height: 1.2;">${report.ticketNumber}: ${report.title}</div>
-          <div style="color: #94A3B8; font-size: 10px; margin-top: 2px;">📍 ${report.neighborhood || 'Враца'} · Наложителност: <strong style="color: ${urgencyScore >= 80 ? '#F87171' : urgencyScore >= 50 ? '#FBBF24' : '#60A5FA'}">${urgencyScore}/100</strong></div>
-        </div>
-      `;
-
-      marker.bindTooltip(tooltipContent, {
-        direction: 'top',
-        offset: [0, -size / 2],
-        opacity: 0.95,
-        className: 'leaflet-custom-tooltip bg-slate-900 border border-slate-700 text-white rounded-lg shadow-xl'
-      });
-
-      marker.on('click', () => {
-        onSelectReport(report.id);
-        onMarkerClick(report);
-      });
-
-      markersGroup.addLayer(marker);
-    });
-  }, [reports, selectedReportId, showHotspots, onSelectReport, onMarkerClick]);
-
-  return (
-    <div
-      ref={containerRef}
-      className="w-full h-full z-0 touch-pan-x touch-pan-y"
-      style={{ minHeight: '100%', width: '100%' }}
-    />
-  );
-};
 import {
   MapPin,
   Flame,
@@ -355,7 +48,6 @@ interface VratsaInteractiveMapProps {
   currentVolunteerName?: string;
 }
 
-// Strict bounds restriction for Vratsa only
 const VRATSA_MAP_RESTRICTION = {
   latLngBounds: {
     north: 43.2500,
@@ -363,10 +55,9 @@ const VRATSA_MAP_RESTRICTION = {
     west: 23.4700,
     east: 23.6300
   },
-  strictBounds: true
+  strictBounds: false
 };
 
-// Map Camera Controller for Google Maps - pans ONLY when explicitly clicking districts or locate-me, never on pin clicks
 const MapCameraController: React.FC<{
   targetDistrict: typeof VRATSA_DISTRICTS[0] | null;
   userCoords: { lat: number; lng: number } | null;
@@ -407,12 +98,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   
-  // Interactive UI modes
-  const [activeLayer, setActiveLayer] = useState<LeafletLayerType>('osm');
-  const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
-  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
-  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showHotspots, setShowHotspots] = useState(false);
 
@@ -428,17 +114,10 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const filterMenuRef = useRef<HTMLDivElement>(null);
-  const categoryDropdownRef = useRef<HTMLDivElement>(null);
-  const statusDropdownRef = useRef<HTMLDivElement>(null);
-  const layerMenuRef = useRef<HTMLDivElement>(null);
 
-  // Google Maps Platform API key
-  const rawApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || '';
+  // Google Maps Platform API key with reliable fallback
+  const rawApiKey = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string) || 'AIzaSyDjvs9fT28lbWyra0yEzOH9JfcOokS7J2I';
   const apiKey = rawApiKey.trim();
-
-  // If no Google Maps API key or loading error, fallback to Leaflet
-  const [mapLoadFailed, setMapLoadFailed] = useState<boolean>(!apiKey);
-  const [mapEngine, setMapEngine] = useState<'google' | 'osm'>(() => (apiKey ? 'google' : 'osm'));
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -446,15 +125,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
       const target = event.target as Node;
       if (filterMenuRef.current && !filterMenuRef.current.contains(target)) {
         setIsFilterMenuOpen(false);
-      }
-      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(target)) {
-        setIsCategoryDropdownOpen(false);
-      }
-      if (statusDropdownRef.current && !statusDropdownRef.current.contains(target)) {
-        setIsStatusDropdownOpen(false);
-      }
-      if (layerMenuRef.current && !layerMenuRef.current.contains(target)) {
-        setIsLayerMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -471,21 +141,18 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     }
   }, [selectedReportId, reports]);
 
-
-  // Filter categories list
   const CATEGORY_OPTIONS = [
     { id: 'all', label: 'Всички категории', icon: '🌐' },
     { id: 'осветление', label: 'Осветление и кабели', icon: '💡' },
     { id: 'дупки', label: 'Дупки и пътна настилка', icon: '🕳️' },
     { id: 'чистота', label: 'Чистота и отпадъци', icon: '🧹' },
-    { id: 'градско обзавеждане', label: 'Градско обзавеждане (пейки)', icon: '🪑' },
+    { id: 'градско обзавеждане', label: 'Градско обзавеждане', icon: '🪑' },
     { id: 'зелени площи', label: 'Зелени площи и паркове', icon: '🌿' },
     { id: 'детски площадки', label: 'Детски площадки', icon: '🎠' },
     { id: 'графити', label: 'Графити и фасади', icon: '🎨' },
     { id: 'вик', label: 'ВиК и шахти', icon: '💧' }
   ];
 
-  // Filter statuses list
   const STATUS_OPTIONS = [
     { id: 'all', label: 'Всички статуси', color: 'bg-slate-400' },
     { id: 'нови', label: 'Нови сигнали', color: 'bg-slate-300' },
@@ -495,71 +162,19 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     { id: 'прегледан', label: 'Прегледани', color: 'bg-blue-400' }
   ];
 
-  // Layer options
-  const LAYER_OPTIONS: { id: LeafletLayerType; label: string; icon: string; desc: string }[] = [
-    { id: 'osm', label: 'Уличен план', icon: '🗺️', desc: 'Стандартна подробна карта' },
-    { id: 'satellite', label: 'Сателитен изглед', icon: '🛰️', desc: 'Реални снимки от космоса' },
-    { id: 'dark', label: 'Нощен / Контрастен', icon: '🌙', desc: 'Тъмна карта, светещи пинове' },
-    { id: 'terrain', label: 'Релеф & Вратцата', icon: '🏔️', desc: 'Топографска височинна карта' }
-  ];
-
-  // Helper function to check if a report matches a category
   const matchesCategory = (r: ReportItem, catId: string): boolean => {
     if (catId === 'all') return true;
     const cat = (r.analysis?.category || '').toLowerCase();
     const title = (r.title || '').toLowerCase();
     const desc = (r.description || '').toLowerCase();
-
-    if (catId === 'осветление') {
-      return (
-        cat.includes('осветление') ||
-        title.includes('осветление') ||
-        desc.includes('осветление') ||
-        desc.includes('кабел') ||
-        desc.includes('стълб') ||
-        desc.includes('лампа') ||
-        title.includes('лампа') ||
-        title.includes('кабел')
-      );
-    } else if (catId === 'дупки') {
-      return (
-        cat.includes('път') ||
-        cat.includes('тротоар') ||
-        title.includes('дупка') ||
-        desc.includes('дупка') ||
-        desc.includes('асфалт') ||
-        desc.includes('павет') ||
-        desc.includes('настилка') ||
-        desc.includes('тротоар') ||
-        title.includes('павета') ||
-        title.includes('асфалт')
-      );
-    } else if (catId === 'чистота') {
-      return (
-        cat.includes('чистота') ||
-        title.includes('боклук') ||
-        desc.includes('боклук') ||
-        desc.includes('отпад') ||
-        desc.includes('смет') ||
-        desc.includes('контейнер') ||
-        title.includes('смет') ||
-        title.includes('контейнер') ||
-        title.includes('бутилки')
-      );
-    } else {
-      return (
-        cat.includes(catId.toLowerCase()) ||
-        title.toLowerCase().includes(catId.toLowerCase()) ||
-        desc.toLowerCase().includes(catId.toLowerCase())
-      );
-    }
+    return cat.includes(catId.toLowerCase()) || title.includes(catId.toLowerCase()) || desc.includes(catId.toLowerCase());
   };
 
   const matchesStatus = (r: ReportItem, stId: string): boolean => {
     if (stId === 'all') return true;
     if (stId === 'нови') return r.status === 'нови';
-    if (stId === 'одобрен' || stId === 'одобрени') return r.status === 'одобрен';
-    if (stId === 'решен' || stId === 'решени') return r.status === 'решен';
+    if (stId === 'одобрен') return r.status === 'одобрен';
+    if (stId === 'решен') return r.status === 'решен';
     if (stId === 'в_изпълнение') return r.status === 'в_изпълнение';
     if (stId === 'прегледан') return r.status === 'прегледан';
     return r.status === stId;
@@ -581,7 +196,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     (filterPath !== 'all' ? 1 : 0) +
     (activeDistrictId !== 'all' ? 1 : 0);
 
-  // Filter reports
   const filteredReports = reports.filter((r) => {
     if (activeDistrictId !== 'all') {
       const matchesDistrict =
@@ -601,7 +215,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     return true;
   });
 
-  // Calculate live count per district
   const getDistrictReportCount = (districtName: string) => {
     if (districtName === 'all') return reports.length;
     return reports.filter(
@@ -623,11 +236,8 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     setFilterCategory('all');
     setFilterStatus('all');
     setIsFilterMenuOpen(false);
-    setIsCategoryDropdownOpen(false);
-    setIsStatusDropdownOpen(false);
   };
 
-  // Interactive Live Geolocation
   const handleLocateMe = () => {
     if (!navigator.geolocation) {
       setLocationToast('Браузърът не поддържа геолокация.');
@@ -647,7 +257,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
         setUserLocation(coords);
         setIsLocating(false);
 
-        // Find nearest district
         let nearest = 'Враца';
         let minDist = Infinity;
         VRATSA_DISTRICTS.forEach((d) => {
@@ -672,7 +281,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     );
   };
 
-  // Map Click Handler (drops a pin without ejecting from the map)
   const handleMapClick = (lat: number, lng: number) => {
     let nearestDistrict = 'Център';
     let minDistance = Infinity;
@@ -688,13 +296,11 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     setDroppedPinCoords({ lat, lng, districtName: nearestDistrict });
   };
 
-  // Google Maps click
   const handleGoogleMapClick = (e: any) => {
     if (!e.detail?.latLng) return;
     handleMapClick(e.detail.latLng.lat, e.detail.latLng.lng);
   };
 
-  // Confirm pin drop and go to submit
   const handleConfirmDroppedPin = () => {
     if (droppedPinCoords && onMapClickNewSignal) {
       onMapClickNewSignal({
@@ -709,7 +315,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
 
   const currentCategoryObj = CATEGORY_OPTIONS.find((c) => c.id === filterCategory) || CATEGORY_OPTIONS[0];
   const currentStatusObj = STATUS_OPTIONS.find((s) => s.id === filterStatus) || STATUS_OPTIONS[0];
-  const currentLayerObj = LAYER_OPTIONS.find((l) => l.id === activeLayer) || LAYER_OPTIONS[0];
 
   return (
     <div
@@ -720,7 +325,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
     >
       {/* 1. TOP INTERACTIVE TOOLBAR */}
       <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-2.5 bg-slate-900/95 border border-slate-800 p-2.5 sm:p-3 rounded-2xl shadow-xl">
-        {/* District Quick Bar (Interactive Horizontal Scroll) */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 xl:pb-0 scrollbar-thin scrollbar-thumb-slate-700">
           <span className="text-xs font-bold text-slate-400 uppercase tracking-wider shrink-0 flex items-center gap-1 mr-1">
             <Compass className="w-3.5 h-3.5 text-emerald-400" />
@@ -755,82 +359,27 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
           })}
         </div>
 
-        {/* Action Controls Toolbar: Layer Switcher, Urgency Radar, Drop Pin, Fullscreen */}
         <div className="flex items-center gap-2 flex-wrap xl:flex-nowrap justify-end shrink-0">
-          {/* Layer Switcher Dropdown */}
-          <div className="relative" ref={layerMenuRef}>
-            <button
-              type="button"
-              onClick={() => setIsLayerMenuOpen(!isLayerMenuOpen)}
-              className="px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-slate-600 transition shadow-sm cursor-pointer"
-              title="Избери изглед на картата (Сателит, Нощен, Уличен)"
-            >
-              <Layers className="w-3.5 h-3.5 text-cyan-400" />
-              <span>{currentLayerObj.icon} {currentLayerObj.label}</span>
-              <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isLayerMenuOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {isLayerMenuOpen && (
-              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-2 z-50 space-y-1 animate-scaleIn">
-                <div className="px-2.5 py-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                  Слоеве на картата
-                </div>
-                {LAYER_OPTIONS.map((layer) => {
-                  const isSelected = activeLayer === layer.id;
-                  return (
-                    <button
-                      key={layer.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveLayer(layer.id);
-                        setIsLayerMenuOpen(false);
-                      }}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs transition text-left cursor-pointer ${
-                        isSelected
-                          ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 font-bold'
-                          : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                      }`}
-                    >
-                      <span className="text-base">{layer.icon}</span>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold">{layer.label}</div>
-                        <div className="text-[10px] text-slate-400 truncate">{layer.desc}</div>
-                      </div>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />}
-                    </button>
-                  );
-                })}
-              </div>
+          <button
+            type="button"
+            onClick={() => setIsFilterMenuOpen(!isFilterMenuOpen)}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition cursor-pointer ${
+              activeFiltersCount > 0 || isFilterMenuOpen
+                ? 'bg-amber-500/25 text-amber-200 border-amber-500/60 shadow-md'
+                : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border-slate-700'
+            }`}
+            title="Отвори филтри (Категория, Статус, Квартал)"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400" />
+            <span>Филтри</span>
+            {activeFiltersCount > 0 && (
+              <span className="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-black">
+                {activeFiltersCount}
+              </span>
             )}
-          </div>
+            <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isFilterMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
 
-          {/* All-in-One Filter Menu Trigger (Optimized for Mobile Bottom Sheet & Desktop Dropdown) */}
-          <div className="relative" ref={filterMenuRef}>
-            <button
-              type="button"
-              onClick={() => {
-                setIsFilterMenuOpen(!isFilterMenuOpen);
-                setIsLayerMenuOpen(false);
-              }}
-              className={`px-2.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 border transition cursor-pointer ${
-                activeFiltersCount > 0 || isFilterMenuOpen
-                  ? 'bg-amber-500/25 text-amber-200 border-amber-500/60 shadow-md'
-                  : 'bg-slate-800/90 hover:bg-slate-750 text-slate-200 border-slate-700'
-              }`}
-              title="Отвори филтри (Категория, Статус, Квартал)"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400" />
-              <span>Филтри</span>
-              {activeFiltersCount > 0 && (
-                <span className="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-black">
-                  {activeFiltersCount}
-                </span>
-              )}
-              <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isFilterMenuOpen ? 'rotate-180' : ''}`} />
-            </button>
-          </div>
-
-          {/* Urgency Radar Hotspots Toggle */}
           <button
             type="button"
             onClick={() => setShowHotspots(!showHotspots)}
@@ -845,7 +394,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             <span className="hidden md:inline">Горещи зони</span>
           </button>
 
-          {/* Locate Me (GPS) */}
           <button
             type="button"
             onClick={handleLocateMe}
@@ -857,7 +405,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             <span className="hidden sm:inline">Намери ме</span>
           </button>
 
-          {/* Pin Drop Mode Toggle */}
           <button
             type="button"
             onClick={() => {
@@ -876,7 +423,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             <span className="md:hidden">Пин</span>
           </button>
 
-          {/* Fullscreen Button */}
           <button
             type="button"
             onClick={() => setIsFullscreen(!isFullscreen)}
@@ -900,9 +446,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             type="button"
             onClick={() => setFilterPath('all')}
             className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
-              filterPath === 'all'
-                ? 'bg-slate-700 text-white border-slate-500'
-                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+              filterPath === 'all' ? 'bg-slate-700 text-white border-slate-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
             }`}
           >
             Всички ({reports.length})
@@ -912,9 +456,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             type="button"
             onClick={() => setFilterPath(filterPath === 'red' ? 'all' : 'red')}
             className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
-              filterPath === 'red'
-                ? 'bg-red-500/30 text-red-200 border-red-500'
-                : 'bg-slate-950 text-red-400 border-slate-800 hover:bg-red-950/40'
+              filterPath === 'red' ? 'bg-red-500/30 text-red-200 border-red-500' : 'bg-slate-950 text-red-400 border-slate-800 hover:bg-red-950/40'
             }`}
           >
             🔴 Аварии / 112
@@ -924,9 +466,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             type="button"
             onClick={() => setFilterPath(filterPath === 'yellow' ? 'all' : 'yellow')}
             className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
-              filterPath === 'yellow'
-                ? 'bg-amber-500/30 text-amber-200 border-amber-500'
-                : 'bg-slate-950 text-amber-400 border-slate-800 hover:bg-amber-950/40'
+              filterPath === 'yellow' ? 'bg-amber-500/30 text-amber-200 border-amber-500' : 'bg-slate-950 text-amber-400 border-slate-800 hover:bg-amber-950/40'
             }`}
           >
             🟡 Ремонти
@@ -936,9 +476,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             type="button"
             onClick={() => setFilterPath(filterPath === 'blue' ? 'all' : 'blue')}
             className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
-              filterPath === 'blue'
-                ? 'bg-blue-500/30 text-blue-200 border-blue-500'
-                : 'bg-slate-950 text-blue-400 border-slate-800 hover:bg-blue-950/40'
+              filterPath === 'blue' ? 'bg-blue-500/30 text-blue-200 border-blue-500' : 'bg-slate-950 text-blue-400 border-slate-800 hover:bg-blue-950/40'
             }`}
           >
             🔵 Доброволчески
@@ -948,16 +486,13 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             type="button"
             onClick={() => setFilterPath(filterPath === 'solved' ? 'all' : 'solved')}
             className={`px-2 py-0.5 rounded-lg text-[11px] font-medium transition cursor-pointer border ${
-              filterPath === 'solved'
-                ? 'bg-emerald-500/30 text-emerald-200 border-emerald-500'
-                : 'bg-slate-950 text-emerald-400 border-slate-800 hover:bg-emerald-950/40'
+              filterPath === 'solved' ? 'bg-emerald-500/30 text-emerald-200 border-emerald-500' : 'bg-slate-950 text-emerald-400 border-slate-800 hover:bg-emerald-950/40'
             }`}
           >
             ✓ Решени
           </button>
         </div>
 
-        {/* Clear Filters / Results count */}
         <div className="flex items-center gap-3 ml-auto">
           <span className="text-[11px] text-slate-400 font-mono">
             Показани: <strong className="text-emerald-400 font-bold">{filteredReports.length}</strong> от {reports.length}
@@ -975,7 +510,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
         </div>
       </div>
 
-      {/* 2.5 MOBILE BOTTOM SHEET & DESKTOP FILTER MODAL DRAWER */}
+      {/* FILTER MODAL DRAWER */}
       {isFilterMenuOpen && (
         <div
           className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center sm:items-center bg-black/75 backdrop-blur-xs p-0 sm:p-4 animate-fadeIn"
@@ -985,7 +520,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
             className="w-full sm:max-w-lg bg-slate-900 border-t sm:border border-slate-700 rounded-t-3xl sm:rounded-3xl shadow-2xl p-5 space-y-4 max-h-[85vh] overflow-y-auto animate-slideUp sm:animate-scaleIn"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="w-5 h-5 text-amber-400" />
@@ -1017,7 +551,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
               </div>
             </div>
 
-            {/* Filter 1: Categories */}
             <div className="space-y-2">
               <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
@@ -1036,9 +569,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                       type="button"
                       onClick={() => setFilterCategory(cat.id)}
                       className={`px-3 py-2 rounded-xl text-xs font-semibold text-left flex items-center justify-between gap-1 transition cursor-pointer border ${
-                        isSelected
-                          ? 'bg-emerald-600/30 text-emerald-200 border-emerald-500 shadow-sm'
-                          : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800'
+                        isSelected ? 'bg-emerald-600/30 text-emerald-200 border-emerald-500 shadow-sm' : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800'
                       }`}
                     >
                       <span className="truncate flex items-center gap-1.5">
@@ -1054,7 +585,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
               </div>
             </div>
 
-            {/* Filter 2: Status */}
             <div className="space-y-2 pt-2 border-t border-slate-800">
               <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
@@ -1073,9 +603,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                       type="button"
                       onClick={() => setFilterStatus(st.id)}
                       className={`px-3 py-2 rounded-xl text-xs font-semibold text-left flex items-center justify-between gap-1 transition cursor-pointer border ${
-                        isSelected
-                          ? 'bg-blue-600/30 text-blue-200 border-blue-500 shadow-sm'
-                          : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800'
+                        isSelected ? 'bg-blue-600/30 text-blue-200 border-blue-500 shadow-sm' : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800'
                       }`}
                     >
                       <span className="flex items-center gap-1.5 truncate">
@@ -1091,7 +619,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
               </div>
             </div>
 
-            {/* Filter 3: Districts */}
             <div className="space-y-2 pt-2 border-t border-slate-800">
               <label className="text-xs font-bold text-slate-300 flex items-center justify-between">
                 <span className="flex items-center gap-1.5">
@@ -1110,9 +637,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                       type="button"
                       onClick={() => handleSelectDistrict(d)}
                       className={`px-3 py-2 rounded-xl text-xs font-semibold text-left flex items-center justify-between gap-1 transition cursor-pointer border ${
-                        isSelected
-                          ? 'bg-amber-600/30 text-amber-200 border-amber-500 shadow-sm'
-                          : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800'
+                        isSelected ? 'bg-amber-600/30 text-amber-200 border-amber-500 shadow-sm' : 'bg-slate-950/80 text-slate-300 border-slate-800 hover:bg-slate-800'
                       }`}
                     >
                       <span className="truncate">{d.name}</span>
@@ -1125,7 +650,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
               </div>
             </div>
 
-            {/* Footer Apply Button */}
             <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-3">
               <span className="text-xs text-slate-400 font-mono">
                 Резултати: <strong className="text-white font-bold">{filteredReports.length}</strong> от {reports.length}
@@ -1142,13 +666,12 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
         </div>
       )}
 
-      {/* 3. MAIN MAP CONTAINER */}
+      {/* 3. GOOGLE MAPS CONTAINER */}
       <div
         className={`relative rounded-2xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-950 transition-all ${
           isFullscreen ? 'flex-1 h-full min-h-[500px]' : 'h-[500px] lg:h-[580px]'
         }`}
       >
-        {/* Toast alert overlay if geolocation fired */}
         {locationToast && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-blue-900/95 text-white border border-blue-400/80 px-4 py-2 rounded-xl text-xs font-bold shadow-2xl backdrop-blur-md animate-bounce pointer-events-none flex items-center gap-2">
             <Navigation className="w-3.5 h-3.5 text-blue-300" />
@@ -1156,155 +679,116 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
           </div>
         )}
 
-        {apiKey && !mapLoadFailed && mapEngine === 'google' ? (
-          <APIProvider
-            apiKey={apiKey}
-            libraries={['marker']}
-            onError={(err) => {
-              console.warn('Google Maps API failed to load, switching to Leaflet layer.', err);
-              setMapLoadFailed(true);
-              setMapEngine('osm');
-            }}
+        <APIProvider apiKey={apiKey} libraries={['marker']}>
+          <Map
+            style={{ width: '100%', height: '100%' }}
+            defaultCenter={{ lat: 43.2047, lng: 23.5477 }}
+            defaultZoom={13.5}
+            minZoom={12}
+            maxZoom={18}
+            restriction={VRATSA_MAP_RESTRICTION}
+            mapId="DEMO_MAP_ID"
+            internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
+            gestureHandling="cooperative"
+            streetViewControl={false}
+            mapTypeControl={true}
+            fullscreenControl={false}
+            onClick={handleGoogleMapClick}
           >
-            <Map
-              style={{ width: '100%', height: '100%' }}
-              defaultCenter={{ lat: 43.2047, lng: 23.5477 }}
-              defaultZoom={13.5}
-              minZoom={12.5}
-              maxZoom={18}
-              restriction={VRATSA_MAP_RESTRICTION}
-              mapId="DEMO_MAP_ID"
-              internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
-              gestureHandling="cooperative"
-              streetViewControl={false}
-              mapTypeControl={false}
-              fullscreenControl={false}
-              onClick={handleGoogleMapClick}
-            >
-              <MapCameraController
-                targetDistrict={targetDistrict}
-                userCoords={userLocation}
-              />
+            <MapCameraController
+              targetDistrict={targetDistrict}
+              userCoords={userLocation}
+            />
 
-              {/* User Live GPS Marker */}
-              {userLocation && (
-                <AdvancedMarker position={userLocation} title="Вашето местоположение">
+            {/* User Live GPS Marker */}
+            {userLocation && (
+              <AdvancedMarker position={userLocation} title="Вашето местоположение">
+                <div className="relative flex items-center justify-center">
+                  <div className="w-8 h-8 rounded-full bg-blue-500/40 animate-ping absolute" />
+                  <div className="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-lg relative" />
+                </div>
+              </AdvancedMarker>
+            )}
+
+            {/* Dropped Pin */}
+            {droppedPinCoords && (
+              <AdvancedMarker position={{ lat: droppedPinCoords.lat, lng: droppedPinCoords.lng }} title="Посочена точка за нов сигнал">
+                <Pin
+                  background="#10B981"
+                  borderColor="#065F46"
+                  glyphColor="#FFFFFF"
+                  scale={1.3}
+                >
+                  <span className="text-xs font-bold text-white">+</span>
+                </Pin>
+              </AdvancedMarker>
+            )}
+
+            {/* Report Markers */}
+            {filteredReports.map((report) => {
+              const lat = report.coordinates?.lat || 43.2047;
+              const lng = report.coordinates?.lng || 23.5477;
+              const isSelected = (selectedReportId === report.id) || (activePopupReport?.id === report.id);
+              const urgency = report.analysis?.urgencyScore ?? 50;
+              const isCritical = urgency >= 80 || report.analysis?.path === 'red';
+
+              let pinBg = '#3B82F6';
+              let pinBorder = '#1D4ED8';
+              let glyphText = '🔵';
+
+              if (report.status === 'решен') {
+                pinBg = '#10B981';
+                pinBorder = '#047857';
+                glyphText = '✓';
+              } else if (report.analysis?.path === 'red') {
+                pinBg = '#EF4444';
+                pinBorder = '#B91C1C';
+                glyphText = '⚠';
+              } else if (report.analysis?.path === 'yellow') {
+                pinBg = '#F59E0B';
+                pinBorder = '#B45309';
+                glyphText = '🛠';
+              }
+
+              return (
+                <AdvancedMarker
+                  key={report.id}
+                  position={{ lat, lng }}
+                  onClick={() => {
+                    setActivePopupReport(report);
+                    if (onSelectReport) onSelectReport(report.id);
+                  }}
+                  title={`${report.ticketNumber}: ${report.title}`}
+                >
                   <div className="relative flex items-center justify-center">
-                    <div className="w-8 h-8 rounded-full bg-blue-500/40 animate-ping absolute" />
-                    <div className="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-lg relative" />
+                    {isCritical && report.status !== 'решен' && (
+                      <div
+                        className="w-10 h-10 rounded-full absolute animate-ping opacity-75"
+                        style={{ backgroundColor: pinBg }}
+                      />
+                    )}
+                    <Pin
+                      background={pinBg}
+                      borderColor={isSelected ? '#FFFFFF' : pinBorder}
+                      glyphColor="#FFFFFF"
+                      scale={isSelected ? 1.35 : 1.1}
+                    >
+                      <span className="text-[11px] font-bold text-white">{glyphText}</span>
+                    </Pin>
                   </div>
                 </AdvancedMarker>
-              )}
+              );
+            })}
+          </Map>
+        </APIProvider>
 
-              {/* Dropped Pin */}
-              {droppedPinCoords && (
-                <AdvancedMarker position={{ lat: droppedPinCoords.lat, lng: droppedPinCoords.lng }} title="Посочена точка за нов сигнал">
-                  <Pin
-                    background="#10B981"
-                    borderColor="#065F46"
-                    glyphColor="#FFFFFF"
-                    scale={1.3}
-                  >
-                    <span className="text-xs font-bold text-white">+</span>
-                  </Pin>
-                </AdvancedMarker>
-              )}
-
-              {/* Report Markers */}
-              {filteredReports.map((report) => {
-                const lat = report.coordinates?.lat || 43.2047;
-                const lng = report.coordinates?.lng || 23.5477;
-                const isSelected = (selectedReportId === report.id) || (activePopupReport?.id === report.id);
-                const urgency = report.analysis?.urgencyScore ?? 50;
-                const isCritical = urgency >= 80 || report.analysis?.path === 'red';
-
-                let pinBg = '#3B82F6';
-                let pinBorder = '#1D4ED8';
-                let glyphText = '🔵';
-
-                if (report.status === 'решен') {
-                  pinBg = '#10B981';
-                  pinBorder = '#047857';
-                  glyphText = '✓';
-                } else if (report.analysis?.path === 'red') {
-                  pinBg = '#EF4444';
-                  pinBorder = '#B91C1C';
-                  glyphText = '⚠';
-                } else if (report.analysis?.path === 'yellow') {
-                  pinBg = '#F59E0B';
-                  pinBorder = '#B45309';
-                  glyphText = '🛠';
-                }
-
-                return (
-                  <AdvancedMarker
-                    key={report.id}
-                    position={{ lat, lng }}
-                    onClick={() => {
-                      setActivePopupReport(report);
-                      if (onSelectReport) onSelectReport(report.id);
-                    }}
-                    title={`${report.ticketNumber}: ${report.title}`}
-                  >
-                    <div className="relative flex items-center justify-center">
-                      {isCritical && report.status !== 'решен' && (
-                        <div
-                          className="w-10 h-10 rounded-full absolute animate-ping opacity-75"
-                          style={{ backgroundColor: pinBg }}
-                        />
-                      )}
-                      <Pin
-                        background={pinBg}
-                        borderColor={isSelected ? '#FFFFFF' : pinBorder}
-                        glyphColor="#FFFFFF"
-                        scale={isSelected ? 1.35 : 1.1}
-                      >
-                        <span className="text-[11px] font-bold text-white">{glyphText}</span>
-                      </Pin>
-                    </div>
-                  </AdvancedMarker>
-                );
-              })}
-            </Map>
-          </APIProvider>
-        ) : (
-          <LeafletMapContainer
-            reports={filteredReports}
-            selectedReportId={activePopupReport?.id || selectedReportId}
-            targetDistrict={targetDistrict}
-            droppedPinCoords={droppedPinCoords}
-            userCoords={userLocation}
-            activeLayer={activeLayer}
-            showHotspots={showHotspots}
-            onSelectReport={(id) => {
-              if (onSelectReport) onSelectReport(id);
-            }}
-            onMarkerClick={(report) => {
-              setActivePopupReport(report);
-            }}
-            onMapClickNewSignal={(coords) => {
-              handleMapClick(coords.lat, coords.lng);
-            }}
-          />
-        )}
-
-        {/* Legend Overlay at Top Left */}
+        {/* Legend Overlay */}
         <div className="absolute top-3 left-3 z-10 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl px-3 py-2 text-xs shadow-lg space-y-1 max-w-[240px] sm:max-w-none pointer-events-auto">
           <div className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between gap-3">
             <span className="flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Карта Враца</span>
+              <span>Google Maps Враца</span>
             </span>
-            {apiKey && !mapLoadFailed && (
-              <button
-                type="button"
-                onClick={() => setMapEngine(mapEngine === 'google' ? 'osm' : 'google')}
-                className="text-[9px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded font-mono border border-slate-700 transition cursor-pointer"
-                title="Превключи карти"
-              >
-                {mapEngine === 'google' ? 'OSM' : 'Google'}
-              </button>
-            )}
           </div>
           <div className="flex flex-col gap-0.5 text-[10px] text-slate-400">
             <span className="flex items-center gap-1.5">
@@ -1326,7 +810,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
           </div>
         </div>
 
-        {/* Interactive Dropped Pin Action Card (Appears when user clicks the map to report) */}
+        {/* Dropped Pin Action Card */}
         {droppedPinCoords && (
           <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 bg-slate-900/95 backdrop-blur-md border border-emerald-500/70 p-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-slideDown pointer-events-auto max-w-sm sm:max-w-md w-[92%]">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 text-xl font-black">
@@ -1368,7 +852,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
           </div>
         )}
 
-        {/* Selected / Clicked Report Detail Modal Drawer on map */}
+        {/* Selected Report Detail Modal Drawer */}
         {activePopupReport && (
           <div className="absolute inset-x-2 bottom-2 top-auto sm:inset-x-auto sm:right-3 sm:bottom-3 sm:top-3 sm:w-96 max-h-[85%] z-20 bg-slate-900/98 backdrop-blur-md border border-slate-700 rounded-2xl shadow-2xl p-4 flex flex-col justify-between overflow-y-auto pointer-events-auto animate-scaleIn">
             <div className="space-y-3">
@@ -1390,7 +874,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                 </button>
               </div>
 
-              {/* Urgency Progress Bar */}
               <div className="bg-slate-950/80 border border-slate-800 p-2.5 rounded-xl space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-slate-400 flex items-center gap-1 font-medium">
@@ -1423,7 +906,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                 </div>
               </div>
 
-              {/* Photo preview */}
               <div className="relative rounded-xl overflow-hidden aspect-video border border-slate-800 bg-slate-950 group">
                 <img
                   src={
@@ -1442,12 +924,10 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                 )}
               </div>
 
-              {/* Description */}
               <p className="text-xs text-slate-300 line-clamp-3">
                 {activePopupReport.description}
               </p>
 
-              {/* Path and Requirements info */}
               <div className="text-xs space-y-1 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
                 <div className="text-slate-400 text-[11px]">
                   Път:{' '}
@@ -1471,7 +951,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
               </div>
             </div>
 
-            {/* Bottom action buttons */}
             <div className="pt-3 border-t border-slate-800 space-y-2">
               {activePopupReport.status !== 'решен' &&
                 activePopupReport.analysis?.path !== 'red' && (
@@ -1499,7 +978,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                   </div>
                 )}
 
-              {/* External Navigation route in Google Maps */}
               {activePopupReport.coordinates && (
                 <a
                   href={`https://www.google.com/maps/dir/?api=1&destination=${activePopupReport.coordinates.lat},${activePopupReport.coordinates.lng}`}
@@ -1513,7 +991,6 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
                 </a>
               )}
 
-              {/* View full detail in reports list */}
               <button
                 type="button"
                 onClick={() => {
