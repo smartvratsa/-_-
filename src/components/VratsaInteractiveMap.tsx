@@ -101,7 +101,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
   const [filterStatus, setFilterStatus] = useState<string>('all');
   
   // Interactive UI modes
-  const [activeLayer, setActiveLayer] = useState<LeafletLayerType>('osm');
+  const [activeLayer, setActiveLayer] = useState<LeafletLayerType>('voyager');
   const [isLayerMenuOpen, setIsLayerMenuOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
@@ -190,7 +190,7 @@ export const VratsaInteractiveMap: React.FC<VratsaInteractiveMapProps> = ({
 
   // Layer options
   const LAYER_OPTIONS: { id: LeafletLayerType; label: string; icon: string; desc: string }[] = [
-    { id: 'osm', label: 'Уличен план', icon: '🗺️', desc: 'Стандартна подробна карта' },
+    { id: 'voyager', label: 'Google Maps (Схема)', icon: '🗺️', desc: 'Чист уличен план (Google Maps стил)' },
     { id: 'satellite', label: 'Сателитен изглед', icon: '🛰️', desc: 'Реални снимки от космоса' },
     { id: 'dark', label: 'Нощен / Контрастен', icon: '🌙', desc: 'Тъмна карта, светещи пинове' },
     { id: 'terrain', label: 'Релеф & Вратцата', icon: '🏔️', desc: 'Топографска височинна карта' }
