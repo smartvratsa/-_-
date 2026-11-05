@@ -85,7 +85,7 @@ export const VratsaLeafletMap: React.FC<VratsaLeafletMapProps> = ({
         maxBoundsViscosity: 1.0, // 100% strictly locked to Vratsa only
         zoomControl: false,
         attributionControl: true,
-        scrollWheelZoom: true,
+        scrollWheelZoom: 'center',
         tapHold: false
       });
 
